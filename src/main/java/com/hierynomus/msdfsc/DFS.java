@@ -61,7 +61,9 @@ public class DFS {
     public void resolveDFS(Session session, SmbPath path) throws DFSException {
         String newPath;
         try {
+            String oldPath = path.toString();
             newPath = resolvePath(session, path.toString());
+            logger.debug("resolveDFS: {} -> {}", oldPath, newPath);
             path.parse(newPath);
         } catch (IOException | BufferException e) {
             // just return the old path back.
@@ -284,6 +286,11 @@ public class DFS {
         Session dfsSession;
         ReferralResult result;
         
+        if (hostName.startsWith("\\")) {
+            // remove leading slash, if present
+            hostName = hostName.substring(1);
+        }
+
         if (hostName.equals(session.getConnection().getRemoteHostname())) {
             dfsSession = session;
             Share dfsShare = dfsSession.connectShare("IPC$");

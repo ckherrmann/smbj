@@ -40,7 +40,6 @@ public class DomainCache {
         //      3.1.5.4.2 Receiving a DC Referral Response
         //      This is applicable only to a domain-joined computer. The DFS client receives this referral response for the DC
         //      referral request that it sent in step 5.2 of section 3.1.4.1. The DC referral response MUST be version 3 or later;
-
         //      otherwise, the client MUST ignore the referral response.
         //      The client MUST verify that the NumberOfReferrals field of the referral header is 1 and that the NameListReferral
         //      bit is set in the referral entry. The other bits of ReferralEntryFlags in the referral entry MUST be ignored.

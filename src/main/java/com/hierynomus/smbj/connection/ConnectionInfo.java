@@ -118,10 +118,6 @@ public class ConnectionInfo {
         this.netBiosName = netBiosName;
     }
 
-    public EnumSet<GlobalCapability> getClientCapabilities() {
-        return clientCapabilities;
-    }
-
     @Override
     public String toString() {
         final StringBuilder sb = new StringBuilder("ConnectionInfo{\n");

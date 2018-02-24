@@ -184,10 +184,6 @@ public class SMB2Header implements SMBHeader {
     public void setStatus(NtStatus status) {
         this.status = status;
     }
-
-    public void setStatus(NtStatus status) {
-        this.status = status;
-    }
     
     public NtStatus getStatus() {
         return status;

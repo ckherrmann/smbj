@@ -145,9 +145,6 @@ public class Session implements AutoCloseable {
         SmbPath smbPath = new SmbPath(remoteHostname, shareName);
         logger.info("Connecting to {} on session {}", smbPath, sessionId);
         try {
-            if (connection.getConfig().isDFSEnabled()) {
-                connection.getClient().resolveDFS(this,smbPath);
-            }
             SMB2TreeConnectRequest smb2TreeConnectRequest = new SMB2TreeConnectRequest(connection.getNegotiatedProtocol().getDialect(), smbPath, sessionId);
             smb2TreeConnectRequest.getHeader().setCreditRequest(256);
             Future<SMB2TreeConnectResponse> send = this.send(smb2TreeConnectRequest);
@@ -265,25 +262,6 @@ public class Session implements AutoCloseable {
         return connection.send(packetSignatory.sign(packet));
     }
     
-    public <T extends SMB2Packet> T processSendResponse(SMB2CreateRequest packet) throws TransportException {
-        while (true) {
-            Future<T> responseFuture = send(packet);
-            T cresponse = Futures.get(responseFuture, SMBRuntimeException.Wrapper);
-            if (cresponse.getHeader().getStatus()==NtStatus.STATUS_PATH_NOT_COVERED) {
-                try {
-                //resolve dfs, modify packet, resend packet to new target, and hopefully it works there
-                    connection.getClient().resolvePathNotCoveredError(this,packet);
-                }
-                catch(DFSException e) { //TODO we wouldn't have to do this if we just threw SMBApiException from inside DFS
-                    throw new SMBApiException(e.getStatus(), e.getStatus().getValue(), packet.getHeader().getMessage(), e);
-                }
-                // and we try again
-            } else {
-                return cresponse;
-            }
-        }
-    }
-
     public <T extends SMB2Packet> T processSendResponse(SMB2CreateRequest packet) throws TransportException {
         Future<T> responseFuture = send(packet);
         return Futures.get(responseFuture, SMBRuntimeException.Wrapper);

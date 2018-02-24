@@ -17,7 +17,8 @@ package com.hierynomus.mssmb2;
 
 import com.hierynomus.mserref.NtStatus;
 import com.hierynomus.protocol.commons.buffer.Buffer;
-import com.hierynomus.smbj.common.SMBBuffer;
+import com.hierynomus.smb.SMBBuffer;
+import com.hierynomus.smb.SMBHeader;
 
 import static com.hierynomus.protocol.commons.EnumWithValue.EnumUtils;
 import static com.hierynomus.protocol.commons.EnumWithValue.EnumUtils.isSet;
@@ -25,7 +26,8 @@ import static com.hierynomus.protocol.commons.EnumWithValue.EnumUtils.isSet;
 /**
  * [MS-SMB2].pdf 2.2.1 SMB2 Packet Header
  */
-public class SMB2Header {
+public class SMB2Header implements SMBHeader {
+    public static final byte[] EMPTY_SIGNATURE = {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0};
     public static final int STRUCTURE_SIZE = 64;
     public static final int SIGNATURE_OFFSET = 48;
     public static final int SIGNATURE_SIZE = 16;
@@ -43,10 +45,9 @@ public class SMB2Header {
     private long statusCode;
     private long flags;
     private long nextCommandOffset; // TODO Message Compounding
+    private byte[] signature;
 
-    public SMB2Header() {
-    }
-
+    @Override
     public void writeTo(SMBBuffer buffer) {
         buffer.putRawBytes(new byte[]{(byte) 0xFE, 'S', 'M', 'B'}); // ProtocolId (4 byte)
         buffer.putUInt16(STRUCTURE_SIZE); // StructureSize (2 byte)
@@ -56,15 +57,15 @@ public class SMB2Header {
         writeCreditRequest(buffer); // CreditRequest (2 bytes)
         buffer.putUInt32(flags); // Flags (4 bytes)
         buffer.putUInt32(nextCommandOffset); // NextCommand (4 bytes)
-        buffer.putUInt64(messageId); // MessageId (8 bytes)
+        buffer.putLong(messageId); // MessageId (8 bytes)
         if (isSet(flags, SMB2MessageFlag.SMB2_FLAGS_ASYNC_COMMAND)) {
-            throw new UnsupportedOperationException("ASYNC not yet implemented");
+            buffer.putLong(asyncId);
         } else {
             buffer.putReserved4(); // Reserved (4 bytes)
             buffer.putUInt32(treeId); // TreeId (4 bytes)
         }
         buffer.putLong(sessionId); // SessionId (8 bytes)
-        buffer.putRawBytes(new byte[]{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}); // Signature (16 bytes)
+        buffer.putRawBytes(EMPTY_SIGNATURE); // Signature (16 bytes)
     }
 
     private void writeChannelSequenceReserved(SMBBuffer buffer) {
@@ -83,15 +84,7 @@ public class SMB2Header {
      * We should at least request the number of credits this request consumes, but we can request more (by calling {@link #setCreditRequest(int)}).
      */
     private void writeCreditRequest(SMBBuffer buffer) {
-        switch (dialect) {
-            case UNKNOWN:
-            case SMB_2_0_2:
-                buffer.putReserved(2);
-                break;
-            default:
-                buffer.putUInt16(creditRequest + creditCharge); // Ask for the credit buffer wanted + what we use
-                break;
-        }
+        buffer.putUInt16(creditRequest + creditCharge); // Ask for the credit buffer wanted + what we use
     }
 
     private void writeCreditCharge(SMBBuffer buffer) {
@@ -158,10 +151,15 @@ public class SMB2Header {
         return creditResponse;
     }
 
+    public void setAsyncId(long asyncId) {
+        this.asyncId = asyncId;
+    }
+
     public long getAsyncId() {
         return asyncId;
     }
 
+    @Override
     public void readFrom(Buffer<?> buffer) throws Buffer.BufferException {
         buffer.skip(4); // ProtocolId (4 bytes) (already verified)
         buffer.skip(2); // StructureSize (2 bytes)
@@ -172,15 +170,19 @@ public class SMB2Header {
         creditResponse = buffer.readUInt16(); // CreditRequest/CreditResponse (2 bytes)
         flags = buffer.readUInt32(); // Flags (4 bytes)
         nextCommandOffset = buffer.readUInt32(); // NextCommand (4 bytes)
-        messageId = buffer.readUInt64(); // MessageId (4 bytes)
+        messageId = buffer.readLong(); // MessageId (4 bytes)
         if (isSet(flags, SMB2MessageFlag.SMB2_FLAGS_ASYNC_COMMAND)) {
-            asyncId = buffer.readUInt64();
+            asyncId = buffer.readLong();
         } else {
             buffer.skip(4); // Reserved (4 bytes)
             treeId = buffer.readUInt32(); // TreeId (4 bytes)
         }
         sessionId = buffer.readLong(); // SessionId (8 bytes)
-        buffer.readRawBytes(16); // Signature (16 bytes)
+        signature = buffer.readRawBytes(16); // Signature (16 bytes)
+    }
+
+    public void setStatus(NtStatus status) {
+        this.status = status;
     }
 
     public void setStatus(NtStatus status) {
@@ -232,5 +234,13 @@ public class SMB2Header {
             flags,
             nextCommandOffset);
 
+    }
+
+    public int getCreditCharge() {
+        return creditCharge;
+    }
+
+    public byte[] getSignature() {
+        return signature;
     }
 }

@@ -15,17 +15,15 @@
  */
 package com.hierynomus.spnego;
 
+import com.hierynomus.protocol.commons.buffer.Buffer;
+import org.bouncycastle.asn1.*;
+
 import java.io.IOException;
 import java.util.Enumeration;
-import org.bouncycastle.asn1.*;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import com.hierynomus.protocol.commons.buffer.Buffer;
 
 import static com.hierynomus.spnego.ObjectIdentifiers.SPNEGO;
 
 abstract class SpnegoToken {
-    private static final Logger logger = LoggerFactory.getLogger(SpnegoToken.class);
 
     private int tokenTagNo;
     private String tokenName;
@@ -46,7 +44,7 @@ abstract class SpnegoToken {
         buffer.putRawBytes(gssApiHeader.getEncoded());
     }
 
-    protected void parseSpnegoToken(ASN1Encodable spnegoToken) throws IOException {
+    protected void parseSpnegoToken(ASN1Encodable spnegoToken) throws IOException, SpnegoException {
         if (!(spnegoToken instanceof ASN1TaggedObject) || ((ASN1TaggedObject) spnegoToken).getTagNo() != tokenTagNo) {
             throw new SpnegoException("Expected to find the " + tokenName + " (CHOICE [" + tokenTagNo + "]) header, not: " + spnegoToken);
         }

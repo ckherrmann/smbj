@@ -15,14 +15,19 @@
  */
 package com.hierynomus.smbj.common;
 
+import java.util.Objects;
+
 public class SmbPath {
-    private String hostname;
-    private String shareName;
-    private String path;
+    private final String hostname;
+    private final String shareName;
+    private final String path;
+
+    public SmbPath(String hostname) {
+        this(hostname, null, null);
+    }
 
     public SmbPath(String hostname, String shareName) {
-        this.shareName = shareName;
-        this.hostname = hostname;
+        this(hostname, shareName, null);
     }
 
     public SmbPath(String hostname, String shareName, String path) {
@@ -30,54 +35,78 @@ public class SmbPath {
         this.hostname = hostname;
         this.path = path;
     }
-    
-    @Override
-    public String toString() {
+
+    public SmbPath(SmbPath parent, String path) {
+        this.hostname = parent.hostname;
+        if (parent.shareName != null) {
+            this.shareName = parent.shareName;
+        } else {
+            throw new IllegalArgumentException("Can only make child SmbPath of fully specified SmbPath");
+        }
+        if (parent.path != null) {
+            this.path = parent.path + "\\" + path;
+        } else {
+            this.path = path;
+        }
+    }
+
+    public String toUncPath() {
         StringBuilder b = new StringBuilder("\\\\");
         b.append(hostname);
-        if (shareName != null) {
+        if (shareName != null && !shareName.isEmpty()) {
             // Clients can either pass \share or share
             if (shareName.charAt(0) != '\\') {
                 b.append("\\");
             }
             b.append(shareName);
-            if (path != null) {
+            if (path != null && !path.isEmpty()) {
                 b.append("\\").append(path);
             }
         }
         return b.toString();
     }
 
-    public void parse(String newPath) {
-        int l;
-        int n;
-        int m;
-        hostname = null;
-        shareName = null;
-        path = null;
-        
-        // newPath starts with one backslash
-        if (newPath.startsWith("\\\\")) {
-            l = 2;
-        } else if (newPath.startsWith("\\")) {
-            l = 1;
-        } else {
-            l = 0;
-        }
+    @Override
+    public String toString() {
+        return toUncPath();
+    }
 
-        n = newPath.indexOf('\\',l);
-        if (n > 0) {
-            hostname = newPath.substring(l,n);
-            m = newPath.indexOf('\\',n+1);
-            if (m > 0) {
-                shareName = newPath.substring(n+1,m);
-                path = newPath.substring(m+1);
+    public static SmbPath parse(String path) {
+        String splitPath = path;
+        if (path.charAt(0) == '\\') {
+            if (path.charAt(1) == '\\') {
+                splitPath = path.substring(2);
             } else {
-                shareName = newPath.substring(n+1);
+                splitPath = path.substring(1);
             }
         }
+
+        String[] split = splitPath.split("\\\\", 3);
+        if (split.length == 1) {
+            return new SmbPath(split[0]);
+        }
+        if (split.length == 2) {
+            return new SmbPath(split[0], split[1]);
+        }
+        return new SmbPath(split[0], split[1], split[2]);
     }
-    
+
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        SmbPath smbPath = (SmbPath) o;
+        return Objects.equals(hostname, smbPath.hostname) &&
+            Objects.equals(shareName, smbPath.shareName) &&
+            Objects.equals(path, smbPath.path);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(hostname, shareName, path);
+    }
+
     public String getHostname() {
         return hostname;
     }
@@ -88,5 +117,13 @@ public class SmbPath {
 
     public String getPath() {
         return path;
+    }
+
+    public boolean isOnSameHost(SmbPath other) {
+        return other != null && Objects.equals(this.hostname, other.hostname);
+    }
+
+    public boolean isOnSameShare(SmbPath other) {
+        return other != null && Objects.equals(this.hostname, other.hostname) && Objects.equals(this.shareName, other.shareName);
     }
 }

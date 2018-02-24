@@ -15,12 +15,12 @@
  */
 package com.hierynomus.mssmb2.messages;
 
-import java.util.EnumSet;
-import com.hierynomus.mserref.NtStatus;
 import com.hierynomus.mssmb2.SMB2Packet;
 import com.hierynomus.mssmb2.SMB2ShareCapabilities;
 import com.hierynomus.protocol.commons.buffer.Buffer;
-import com.hierynomus.smbj.common.SMBBuffer;
+import com.hierynomus.smb.SMBBuffer;
+
+import java.util.Set;
 
 import static com.hierynomus.protocol.commons.EnumWithValue.EnumUtils.toEnumSet;
 
@@ -33,24 +33,17 @@ public class SMB2TreeConnectResponse extends SMB2Packet {
 
     private byte shareType;
     private long shareFlags;
-    private EnumSet<SMB2ShareCapabilities> capabilities;
+    private Set<SMB2ShareCapabilities> capabilities;
     private long maximalAccess;
-
-    public SMB2TreeConnectResponse() {
-        super();
-    }
-
 
     @Override
     protected void readMessage(SMBBuffer buffer) throws Buffer.BufferException {
-        if (header.getStatus() == NtStatus.STATUS_SUCCESS) {
-            buffer.skip(2); // StructureSize (2 bytes)
-            shareType = buffer.readByte(); // ShareType (1 byte)
-            buffer.readByte(); // Reserved (1 byte)
-            shareFlags = buffer.readUInt32(); // ShareFlags (4 bytes)
-            capabilities = toEnumSet(buffer.readUInt32(), SMB2ShareCapabilities.class); // Capabilities (4 bytes)
-            maximalAccess = buffer.readUInt32(); // MaximalAccess (4 bytes)
-        }
+        buffer.skip(2); // StructureSize (2 bytes)
+        shareType = buffer.readByte(); // ShareType (1 byte)
+        buffer.readByte(); // Reserved (1 byte)
+        shareFlags = buffer.readUInt32(); // ShareFlags (4 bytes)
+        capabilities = toEnumSet(buffer.readUInt32(), SMB2ShareCapabilities.class); // Capabilities (4 bytes)
+        maximalAccess = buffer.readUInt32(); // MaximalAccess (4 bytes)
     }
 
     public void setShareType(byte shareType) {
@@ -88,7 +81,7 @@ public class SMB2TreeConnectResponse extends SMB2Packet {
         return shareFlags;
     }
 
-    public EnumSet<SMB2ShareCapabilities> getCapabilities() {
+    public Set<SMB2ShareCapabilities> getCapabilities() {
         return capabilities;
     }
     

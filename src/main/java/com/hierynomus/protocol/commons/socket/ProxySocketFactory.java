@@ -15,14 +15,15 @@
  */
 package com.hierynomus.protocol.commons.socket;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.net.SocketFactory;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Proxy;
 import java.net.Socket;
-import javax.net.SocketFactory;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 public class ProxySocketFactory extends SocketFactory {
     private static final Logger logger = LoggerFactory.getLogger(ProxySocketFactory.class);
@@ -53,6 +54,11 @@ public class ProxySocketFactory extends SocketFactory {
     }
 
     @Override
+    public Socket createSocket() throws IOException {
+        return new Socket(proxy);
+    }
+
+    @Override
     public Socket createSocket(String address, int port) throws IOException {
         return createSocket(new InetSocketAddress(address, port), null);
     }
@@ -77,7 +83,7 @@ public class ProxySocketFactory extends SocketFactory {
         if (bindAddress != null) {
             socket.bind(bindAddress);
         }
-        logger.info("Connecting to {}", address);
+        logger.debug("Connecting to {}", address);
         socket.connect(address, connectTimeout);
         return socket;
     }

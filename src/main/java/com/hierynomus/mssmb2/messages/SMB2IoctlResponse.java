@@ -19,9 +19,7 @@ import com.hierynomus.mserref.NtStatus;
 import com.hierynomus.mssmb2.SMB2FileId;
 import com.hierynomus.mssmb2.SMB2Packet;
 import com.hierynomus.protocol.commons.buffer.Buffer;
-import com.hierynomus.smbj.common.SMBBuffer;
-
-import static com.hierynomus.protocol.commons.EnumWithValue.EnumUtils.valueOf;
+import com.hierynomus.smb.SMBBuffer;
 
 /**
  * [MS-SMB2].pdf 2.2.32 SMB2 IOCTL Response
@@ -30,24 +28,17 @@ import static com.hierynomus.protocol.commons.EnumWithValue.EnumUtils.valueOf;
  */
 public class SMB2IoctlResponse extends SMB2Packet {
 
-    private SMB2IoctlRequest.ControlCode controlCode;
+    private int controlCode;
     private SMB2FileId fileId;
 
     byte[] inputBuffer;
     byte[] outputBuffer;
 
-    public SMB2IoctlResponse() {
-        super();
-    }
-
     @Override
     protected void readMessage(SMBBuffer buffer) throws Buffer.BufferException {
-        // TODO how to handle errors correctly
-        if (header.getStatus() != NtStatus.STATUS_SUCCESS) return;
-
         buffer.skip(2); // StructureSize (2 bytes)
         buffer.skip(2); // Reserved (2 bytes)
-        controlCode = valueOf(buffer.readUInt32(), SMB2IoctlRequest.ControlCode.class, null); // CtlCode (4 bytes)
+        controlCode = buffer.readUInt32AsInt(); // CtlCode (4 bytes)
         fileId = SMB2FileId.read(buffer); // FileId (16 bytes)
 
         int inputOffset = buffer.readUInt32AsInt(); // Input Offset (4 bytes)
@@ -69,6 +60,18 @@ public class SMB2IoctlResponse extends SMB2Packet {
 
     }
 
+    /**
+     * [MS-SMB2].pdf 3.3.4.4
+     * STATUS_BUFFER_OVERFLOW and STATUS_INVALID_PARAMETER should be treated as a success code.
+     *
+     * @param status The status to verify
+     * @return
+     */
+    @Override
+    protected boolean isSuccess(NtStatus status) {
+        return super.isSuccess(status) || status == NtStatus.STATUS_BUFFER_OVERFLOW || status == NtStatus.STATUS_INVALID_PARAMETER;
+    }
+
     public byte[] getOutputBuffer() {
         return outputBuffer;
     }
@@ -80,8 +83,12 @@ public class SMB2IoctlResponse extends SMB2Packet {
     public byte[] getInputBuffer() {
         return inputBuffer;
     }
-    
-    public void setInputBuffer(byte[] inputBuffer) {
-        this.inputBuffer = inputBuffer;
+
+    public int getControlCode() {
+        return controlCode;
+    }
+
+    public SMB2FileId getFileId() {
+        return fileId;
     }
 }

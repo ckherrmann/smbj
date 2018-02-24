@@ -15,24 +15,29 @@
  */
 package com.hierynomus.smbj.transport;
 
-import java.io.InputStream;
-import java.util.concurrent.atomic.AtomicBoolean;
+import com.hierynomus.protocol.Packet;
+import com.hierynomus.protocol.transport.PacketReceiver;
+import com.hierynomus.protocol.transport.TransportException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import com.hierynomus.protocol.Packet;
-import com.hierynomus.smbj.common.SMBRuntimeException;
 
-public abstract class PacketReader<P extends Packet<P, ?>> implements Runnable {
+import java.io.InputStream;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+public abstract class PacketReader<P extends Packet<?>> implements Runnable {
     private static final Logger logger = LoggerFactory.getLogger(PacketReader.class);
 
     protected InputStream in;
     private PacketReceiver<P> handler;
 
     private AtomicBoolean stopped = new AtomicBoolean(false);
+    private Thread thread;
 
-    public PacketReader(InputStream in, PacketReceiver<P> handler) {
+    public PacketReader(String host, InputStream in, PacketReceiver<P> handler) {
         this.in = in;
         this.handler = handler;
+        this.thread = new Thread(this, "Packet Reader for " + host);
+        this.thread.setDaemon(true);
     }
 
     @Override
@@ -42,24 +47,28 @@ public abstract class PacketReader<P extends Packet<P, ?>> implements Runnable {
                 readPacket();
             } catch (TransportException e) {
                 if (stopped.get()) {
-                    logger.info("PacketReader stopped.");
-                    return;
+                    break;
                 }
+                logger.info("PacketReader error, got exception.", e);
                 handler.handleError(e);
-                throw new SMBRuntimeException(e);
+                return;
             }
+        }
+        if (stopped.get()) {
+            logger.info("{} stopped.", thread);
         }
     }
 
     public void stop() {
         logger.debug("Stopping PacketReader...");
         stopped.set(true);
+        thread.interrupt();
     }
 
     private void readPacket() throws TransportException {
-        P smb2Packet = doRead();
-        logger.debug("Received packet << {} >>", smb2Packet);
-        handler.handle(smb2Packet);
+        P packet = doRead();
+        logger.debug("Received packet {}", packet);
+        handler.handle(packet);
     }
 
     /**
@@ -69,4 +78,9 @@ public abstract class PacketReader<P extends Packet<P, ?>> implements Runnable {
      * @throws TransportException
      */
     protected abstract P doRead() throws TransportException;
+
+    public void start() {
+        logger.debug("Starting PacketReader on thread: {}", thread.getName());
+        this.thread.start();
+    }
 }

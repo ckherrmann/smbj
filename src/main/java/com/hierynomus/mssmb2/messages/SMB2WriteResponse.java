@@ -15,10 +15,9 @@
  */
 package com.hierynomus.mssmb2.messages;
 
-import com.hierynomus.mserref.NtStatus;
 import com.hierynomus.mssmb2.SMB2Packet;
 import com.hierynomus.protocol.commons.buffer.Buffer;
-import com.hierynomus.smbj.common.SMBBuffer;
+import com.hierynomus.smb.SMBBuffer;
 
 /**
  * [MS-SMB2].pdf 2.2.22 SMB2 Write Response
@@ -27,21 +26,14 @@ public class SMB2WriteResponse extends SMB2Packet {
 
     private long bytesWritten;
 
-    public SMB2WriteResponse() {
-        super();
-    }
-
-
     @Override
     protected void readMessage(SMBBuffer buffer) throws Buffer.BufferException {
-        if (header.getStatus() == NtStatus.STATUS_SUCCESS) {
-            buffer.skip(2); // StructureSize (2 bytes)
-            buffer.skip(2); // Reserved (2 bytes)
-            bytesWritten = buffer.readUInt32(); // Count (4 bytes)
-            buffer.skip(4); // Remaining (4 bytes) - Reserved do not use
-            buffer.skip(2); // WriteChannelInfoOffset (2 bytes) - Reserved do not use
-            buffer.skip(2); // WriteChannelInfoLength (2 bytes) - Reserved do not use
-        }
+        buffer.skip(2); // StructureSize (2 bytes)
+        buffer.skip(2); // Reserved (2 bytes)
+        bytesWritten = buffer.readUInt32(); // Count (4 bytes)
+        buffer.skip(4); // Remaining (4 bytes) - Reserved do not use
+        buffer.skip(2); // WriteChannelInfoOffset (2 bytes) - Reserved do not use
+        buffer.skip(2); // WriteChannelInfoLength (2 bytes) - Reserved do not use
     }
 
     public long getBytesWritten() {

@@ -15,36 +15,32 @@
  */
 package com.hierynomus.smbj.session;
 
-import java.io.IOException;
-import java.util.concurrent.Future;
-
-import javax.crypto.spec.SecretKeySpec;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import com.hierynomus.msdfsc.DFSException;
-import com.hierynomus.mserref.NtStatus;
 import com.hierynomus.mssmb2.SMB2Packet;
 import com.hierynomus.mssmb2.SMB2ShareCapabilities;
-import com.hierynomus.mssmb2.messages.SMB2CreateRequest;
-import com.hierynomus.mssmb2.messages.SMB2Logoff;
-import com.hierynomus.mssmb2.messages.SMB2TreeConnectRequest;
-import com.hierynomus.mssmb2.messages.SMB2TreeConnectResponse;
+import com.hierynomus.mssmb2.SMBApiException;
+import com.hierynomus.mssmb2.messages.*;
 import com.hierynomus.protocol.commons.concurrent.Futures;
+import com.hierynomus.protocol.transport.TransportException;
+import com.hierynomus.security.SecurityProvider;
 import com.hierynomus.smbj.auth.AuthenticationContext;
-import com.hierynomus.smbj.common.MessageSigning;
-import com.hierynomus.smbj.common.SMBApiException;
 import com.hierynomus.smbj.common.SMBRuntimeException;
 import com.hierynomus.smbj.common.SmbPath;
 import com.hierynomus.smbj.connection.Connection;
 import com.hierynomus.smbj.event.SMBEventBus;
 import com.hierynomus.smbj.event.SessionLoggedOff;
 import com.hierynomus.smbj.event.TreeDisconnected;
+import com.hierynomus.smbj.paths.PathResolveException;
+import com.hierynomus.smbj.paths.PathResolver;
 import com.hierynomus.smbj.share.*;
-import com.hierynomus.smbj.transport.TransportException;
-
 import net.engio.mbassy.listener.Handler;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+
+import static java.lang.String.format;
 
 /**
  * A Session
@@ -53,28 +49,72 @@ public class Session implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(Session.class);
     private long sessionId;
 
-    private SecretKeySpec signingKeySpec;
+    private PacketSignatory packetSignatory;
     private boolean signingRequired;
+    private boolean encryptData; // SMB3.x
 
     private Connection connection;
     private SMBEventBus bus;
+    private final PathResolver pathResolver;
     private TreeConnectTable treeConnectTable = new TreeConnectTable();
-    private AuthenticationContext auth;
+    private AuthenticationContext userCredentials;
 
-    public Session(long sessionId, Connection connection, AuthenticationContext auth, SMBEventBus bus, boolean signingRequired) {
-        this.sessionId = sessionId;
+    private boolean guest;
+    private boolean anonymous;
+
+    public Session(Connection connection, AuthenticationContext userCredentials, SMBEventBus bus, PathResolver pathResolver, SecurityProvider securityProvider) {
         this.connection = connection;
+        this.userCredentials = userCredentials;
         this.bus = bus;
-        this.signingKeySpec = null;
-        this.signingRequired = signingRequired;
-        this.auth = auth;
+        this.pathResolver = pathResolver;
+        this.packetSignatory = new PacketSignatory(connection.getNegotiatedProtocol().getDialect(), securityProvider);
         if (bus != null) {
             bus.subscribe(this);
         }
     }
 
+    public void init(SMB2SessionSetup setup) {
+        this.guest = setup.getSessionFlags().contains(SMB2SessionSetup.SMB2SessionFlags.SMB2_SESSION_FLAG_IS_GUEST);
+        this.anonymous = setup.getSessionFlags().contains(SMB2SessionSetup.SMB2SessionFlags.SMB2_SESSION_FLAG_IS_NULL);
+        validateAndSetSigning(setup);
+        if (guest || anonymous) {
+            packetSignatory.init(null); // De-initialize the signatory if it was initialized with a bogus key during the auth
+        }
+    }
+
+    /**
+     * [MS-SMB2] 3.2.5.3.1 Handling a New Authentication
+     * @param setup
+     */
+    private void validateAndSetSigning(SMB2SessionSetup setup) {
+        boolean requireMessageSigning = connection.getConfig().isSigningRequired();
+        boolean connectionSigningRequired = connection.getConnectionInfo().isServerRequiresSigning();
+
+        if (requireMessageSigning || connectionSigningRequired) {
+            signingRequired = true;
+        }
+
+        if (anonymous) {
+            // If the security subsystem indicates that the session was established by an anonymous user, Session.SigningRequired MUST be set to FALSE.
+            signingRequired = false;
+        }
+        if (guest && connection.getConfig().isSigningRequired()) {
+            throw new SMB2GuestSigningRequiredException();
+        } else if (guest) {
+            signingRequired = false;
+        }
+        if (connection.getNegotiatedProtocol().getDialect().isSmb3x() && setup.getSessionFlags().contains(SMB2SessionSetup.SMB2SessionFlags.SMB2_SESSION_FLAG_ENCRYPT_DATA)) {
+            encryptData = true;
+            signingRequired = false;
+        }
+    }
+
     public long getSessionId() {
         return sessionId;
+    }
+
+    public void setSessionId(long sessionId) {
+        this.sessionId = sessionId;
     }
 
     /**
@@ -88,10 +128,13 @@ public class Session implements AutoCloseable {
      * @return the handle to the connected share.
      */
     public Share connectShare(String shareName) {
-        TreeConnect connectedConnect = treeConnectTable.getTreeConnect(shareName);
-        if (connectedConnect != null) {
-            logger.info("Returning cached Share {} for {}", connectedConnect.getTreeId(), shareName);
-            return connectedConnect.getHandle();
+        if (shareName.contains("\\")) {
+            throw new IllegalArgumentException(format("Share name (%s) cannot contain '\\' characters.", shareName));
+        }
+        Share connectedShare = treeConnectTable.getTreeConnect(shareName);
+        if (connectedShare != null) {
+            logger.debug("Returning cached Share {} for {}", connectedShare, shareName);
+            return connectedShare;
         } else {
             return connectTree(shareName);
         }
@@ -100,7 +143,7 @@ public class Session implements AutoCloseable {
     private Share connectTree(final String shareName) {
         String remoteHostname = connection.getRemoteHostname();
         SmbPath smbPath = new SmbPath(remoteHostname, shareName);
-        logger.info("Connection to {} on session {}", smbPath, sessionId);
+        logger.info("Connecting to {} on session {}", smbPath, sessionId);
         try {
             if (connection.getConfig().isDFSEnabled()) {
                 connection.getClient().resolveDFS(this,smbPath);
@@ -108,7 +151,22 @@ public class Session implements AutoCloseable {
             SMB2TreeConnectRequest smb2TreeConnectRequest = new SMB2TreeConnectRequest(connection.getNegotiatedProtocol().getDialect(), smbPath, sessionId);
             smb2TreeConnectRequest.getHeader().setCreditRequest(256);
             Future<SMB2TreeConnectResponse> send = this.send(smb2TreeConnectRequest);
-            SMB2TreeConnectResponse response = Futures.get(send, TransportException.Wrapper);
+            SMB2TreeConnectResponse response = Futures.get(send, connection.getConfig().getTransactTimeout(), TimeUnit.MILLISECONDS, TransportException.Wrapper);
+            try {
+                SmbPath resolvedSharePath = pathResolver.resolve(this, response, smbPath);
+                if (!resolvedSharePath.isOnSameShare(smbPath)) {
+                    try {
+                        Connection connection = getConnection().getClient().connect(resolvedSharePath.getHostname());
+                        Session session = connection.authenticate(getAuthenticationContext());
+                        return session.connectShare(shareName);
+                    } catch (IOException e) {
+                        throw new SMBRuntimeException("Could not connect to DFS root " + resolvedSharePath, e);
+                    }
+                }
+            } catch (PathResolveException ignored) {
+                // Ignored
+            }
+
             if (response.getHeader().getStatus().isError()) {
                 logger.debug(response.getHeader().toString());
                 throw new SMBApiException(response.getHeader(), "Could not connect to " + smbPath);
@@ -120,24 +178,27 @@ public class Session implements AutoCloseable {
 
             long treeId = response.getHeader().getTreeId();
             TreeConnect treeConnect = new TreeConnect(treeId, smbPath, this, response.getCapabilities(), connection, bus);
-            treeConnectTable.register(treeConnect);
+
+            Share share;
             if (response.isDiskShare()) {
-                return new DiskShare(smbPath, treeConnect);
+                share = new DiskShare(smbPath, treeConnect, pathResolver);
             } else if (response.isNamedPipe()) {
-                return new NamedPipe(smbPath, treeConnect);
+                share = new PipeShare(smbPath, treeConnect);
             } else if (response.isPrinterShare()) {
-                return new PrinterShare(smbPath, treeConnect);
+                share = new PrinterShare(smbPath, treeConnect);
             } else {
                 throw new SMBRuntimeException("Unknown ShareType returned in the TREE_CONNECT Response");
             }
-        } catch (DFSException e) {
-            throw new SMBRuntimeException(e);
+
+            treeConnectTable.register(share);
+            return share;
         } catch (TransportException e) {
             throw new SMBRuntimeException(e);
         }
     }
 
     @Handler
+    @SuppressWarnings("unused")
     private void disconnectTree(TreeDisconnected disconnectEvent) {
         if (disconnectEvent.getSessionId() == sessionId) {
             logger.debug("Notified of TreeDisconnected <<{}>>", disconnectEvent.getTreeId());
@@ -146,36 +207,39 @@ public class Session implements AutoCloseable {
     }
 
     public void logoff() throws TransportException {
-        logger.info("Logging off session {} from host {}", sessionId, connection.getRemoteHostname());
-        for (TreeConnect treeConnect : treeConnectTable.getOpenTreeConnects()) {
-            try {
-                treeConnect.getHandle().close();
-            } catch (IOException e) {
-                logger.error("Caught exception while closing TreeConnect with id: {}", treeConnect.getTreeId(), e);
+        try {
+            logger.info("Logging off session {} from host {}", sessionId, connection.getRemoteHostname());
+            for (Share share : treeConnectTable.getOpenTreeConnects()) {
+                try {
+                    share.close();
+                } catch (IOException e) {
+                    logger.error("Caught exception while closing TreeConnect with id: {}", share.getTreeConnect().getTreeId(), e);
+                }
             }
+            SMB2Logoff logoff = new SMB2Logoff(connection.getNegotiatedProtocol().getDialect(), sessionId);
+            SMB2Logoff response = Futures.get(this.<SMB2Logoff>send(logoff), connection.getConfig().getTransactTimeout(), TimeUnit.MILLISECONDS, TransportException.Wrapper);
+            if (!response.getHeader().getStatus().isSuccess()) {
+                throw new SMBApiException(response.getHeader(), "Could not logoff session <<" + sessionId + ">>");
+            }
+        } finally {
+            bus.publish(new SessionLoggedOff(sessionId));
         }
-        SMB2Logoff logoff = new SMB2Logoff(connection.getNegotiatedProtocol().getDialect(), sessionId);
-        SMB2Logoff response = Futures.get(this.<SMB2Logoff>send(logoff), TransportException.Wrapper);
-        if (!response.getHeader().getStatus().isSuccess()) {
-            throw new SMBApiException(response.getHeader(), "Could not logoff session <<" + sessionId + ">>");
-        }
-        bus.publish(new SessionLoggedOff(sessionId));
     }
 
     public boolean isSigningRequired() {
         return signingRequired;
     }
 
-    public void setSigningKey(byte[] signingKeyBytes) {
-        if (connection.getNegotiatedProtocol().getDialect().isSmb3x()) {
-            throw new IllegalStateException("Cannot set a signing key (yet) for SMB3.x");
-        } else {
-            this.signingKeySpec = new SecretKeySpec(signingKeyBytes, MessageSigning.HMAC_SHA256_ALGORITHM);
-        }
+    public boolean isGuest() {
+        return guest;
     }
 
-    public SecretKeySpec getSigningKeySpec() {
-        return signingKeySpec;
+    public boolean isAnonymous() {
+        return anonymous;
+    }
+
+    public void setSigningKey(byte[] signingKeyBytes) {
+        packetSignatory.init(signingKeyBytes);
     }
 
     @Override
@@ -195,10 +259,10 @@ public class Session implements AutoCloseable {
      * @throws TransportException
      */
     public <T extends SMB2Packet> Future<T> send(SMB2Packet packet) throws TransportException {
-        if (signingRequired && signingKeySpec == null) {
+        if (signingRequired && !packetSignatory.isInitialized()) {
             throw new TransportException("Message signing is required, but no signing key is negotiated");
         }
-        return connection.send(packet, signingKeySpec);
+        return connection.send(packetSignatory.sign(packet));
     }
     
     public <T extends SMB2Packet> T processSendResponse(SMB2CreateRequest packet) throws TransportException {
@@ -220,20 +284,16 @@ public class Session implements AutoCloseable {
         }
     }
 
-    public void setBus(SMBEventBus bus) {
-        if (this.bus != null) {
-            this.bus.unsubscribe(this);
-            this.bus = null;
-        }
-        this.bus = bus;
-        bus.subscribe(this);
+    public <T extends SMB2Packet> T processSendResponse(SMB2CreateRequest packet) throws TransportException {
+        Future<T> responseFuture = send(packet);
+        return Futures.get(responseFuture, SMBRuntimeException.Wrapper);
     }
 
     public AuthenticationContext getAuthenticationContext() {
-        return auth;
+        return userCredentials;
     }
-    
-    public void setSessionId(long sessionId) {
-        this.sessionId = sessionId;
+
+    public PacketSignatory getPacketSignatory() {
+        return packetSignatory;
     }
 }

@@ -14,499 +14,308 @@
  * limitations under the License.
  */
 package com.hierynomus.msdfsc
-import static com.hierynomus.protocol.commons.EnumWithValue.EnumUtils.isSet;
-import static org.junit.Assert.assertEquals;
 
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.UUID;
-import java.util.concurrent.Future;
-import java.util.List;
-
-import org.junit.Test;
-
-import com.hierynomus.msdfsc.DFS;
-import com.hierynomus.msdfsc.DFSException;
-import com.hierynomus.msdfsc.DFSReferral;
-import com.hierynomus.msdfsc.DFS.ReferralResult;
-import com.hierynomus.msdfsc.SMB2GetDFSReferralResponse.ReferralHeaderFlags;
-import com.hierynomus.msdfsc.SMB2GetDFSReferralResponse;
-import com.hierynomus.mssmb2.messages.SMB2IoctlResponse;
-import com.hierynomus.mssmb2.messages.SMB2IoctlRequest;
-import com.hierynomus.mssmb2.messages.SMB2TreeConnectResponse;
-import com.hierynomus.mssmb2.messages.SMB2TreeConnectRequest;
-import com.hierynomus.mssmb2.messages.SMB2TreeDisconnect;
+import com.hierynomus.msdfsc.messages.DFSReferral
+import com.hierynomus.msdfsc.messages.DFSReferralV34
+import com.hierynomus.msdfsc.messages.SMB2GetDFSReferralResponse
+import com.hierynomus.mserref.NtStatus
 import com.hierynomus.mssmb2.SMB2Dialect
-import com.hierynomus.protocol.commons.buffer.Buffer.BufferException;
-import com.hierynomus.smbj.DefaultConfig
+import com.hierynomus.mssmb2.SMB2Packet
+import com.hierynomus.mssmb2.SMB2ShareCapabilities
+import com.hierynomus.mssmb2.messages.*
+import com.hierynomus.security.jce.JceSecurityProvider
+import com.hierynomus.smb.SMBBuffer
 import com.hierynomus.smbj.SMBClient
-import com.hierynomus.smbj.common.SmbPath;
-import com.hierynomus.smbj.session.Session;
-import com.hierynomus.smbj.share.TreeConnect;
-import com.hierynomus.smbj.connection.Connection;
-import com.hierynomus.smbj.connection.Request;
-import com.hierynomus.smbj.event.SMBEventBus;
-import com.hierynomus.smbj.transport.TransportException;
-import com.hierynomus.smbj.transport.TransportLayer;
+import com.hierynomus.smbj.SmbConfig
 import com.hierynomus.smbj.auth.AuthenticationContext
+import com.hierynomus.smbj.common.SmbPath
+import com.hierynomus.smbj.connection.Connection
 import com.hierynomus.smbj.connection.NegotiatedProtocol
-import com.hierynomus.smbj.connection.Request
-import com.hierynomus.mserref.NtStatus;
-import com.hierynomus.smbj.common.SMBBuffer
-import com.hierynomus.mssmb2.SMB2ShareCapabilities;
-
+import com.hierynomus.smbj.event.SMBEventBus
+import com.hierynomus.smbj.session.Session
 import spock.lang.Specification
 
 class DFSTest extends Specification {
-    def "should resolve dfs for a path"() {
-        given:
-        def connection
-        def client = Stub(SMBClient) {
-            connect(_) >> connection
-            connect(_,_) >> connection
-        }
-        def transport = Mock(TransportLayer)
-        def bus = new SMBEventBus()
-        def protocol = new NegotiatedProtocol(SMB2Dialect.SMB_2_1, 1000,1000,1000,false)
+//  def "should resolve dfs for a path"() {
+//    given:
+//    def connection
+//    def config = SmbConfig.builder().build()
+//    def client = Stub(SMBClient, constructorArgs: [config]) {
+//      connect(_) >> connection
+//      connect(_, _) >> connection
+//    }
+//    def bus = new SMBEventBus()
+//    def protocol = new NegotiatedProtocol(SMB2Dialect.SMB_2_1, 1000, 1000, 1000, false)
+//
+//    def responder = new StubResponder()
+//    responder.register(SMB2TreeConnectRequest, connectResponse())
+//    responder.register(SMB2TreeDisconnect, disconnectResponse())
+//    responder.register(SMB2IoctlRequest, ioResponse())
+//    connection = Stub(Connection, constructorArgs: [config, client, bus]) {
+//      getRemoteHostname() >> "10.0.0.10"
+//      getConfig() >> config
+//      getRemotePort() >> 445
+//      getNegotiatedProtocol() >> protocol
+//      send(_) >> { SMB2Packet p ->
+//        new DirectFuture<SMB2Packet>(responder.respond(p))
+//      }
+//    }
+//
+//    def auth = new AuthenticationContext("username", "password".toCharArray(), "domain.com")
+//    def session = new Session(123, connection, auth, bus, false, true, new JceSecurityProvider())
+//    def path = new SmbPath("10.0.0.10", "Sales")
+//
+//    when:
+//    def resolvedPath = session.resolver.resolve(session, path.toUncPath())
+//
+//    then:
+//    with(SmbPath.parse(resolvedPath)) {
+//      hostname == "SERVERHOST"
+//      shareName == "Sales"
+//    }
+//  }
+//
+//  private SMB2TreeDisconnect disconnectResponse() {
+//    def response = new SMB2TreeDisconnect();
+//    response.getHeader().setStatus(NtStatus.STATUS_SUCCESS)
+//    response
+//  }
+//
+//  private SMB2TreeConnectResponse connectResponse() {
+//    def response = new SMB2TreeConnectResponse()
+//    response.getHeader().setStatus(NtStatus.STATUS_SUCCESS)
+//    response.capabilities = EnumSet.of(SMB2ShareCapabilities.SMB2_SHARE_CAP_DFS)
+//    response.shareType = (byte) 0x01
+//    response
+//  }
+//
+//  private SMB2IoctlResponse ioResponse() {
+//    def response = new SMB2IoctlResponse()
+//    response.setOutputBuffer("260001000300000004002200010004002c010000220044006600000000000000000000000000000000005C00310030002E0030002E0030002E00310030005C00730061006C006500730000005C00310030002E0030002E0030002E00310030005C00730061006C006500730000005C0053004500520056004500520048004F00530054005C00530061006C00650073000000".decodeHex())
+//    response.getHeader().setStatus(NtStatus.STATUS_SUCCESS)
+//    response
+//  }
+//
+//  def "testdomain"() {
+//    given:
+//    def destination = "SERVERHOST"
+//    def config = SmbConfig.builder().build()
+//    def connection
+//    def session
+//    def client = Stub(SMBClient, constructorArgs: [config]) {
+//      connect(_) >> { String host -> connection }
+//      connect(_, _) >> { String host, int port ->
+//        connection
+//      }
+//    }
+//    def bus = new SMBEventBus()
+//    def protocol = new NegotiatedProtocol(SMB2Dialect.SMB_2_1, 1000, 1000, 1000, false)
+//    def responder = new StubResponder()
+//    responder.register(SMB2TreeConnectRequest, connectResponse())
+//    responder.register(SMB2TreeDisconnect, disconnectResponse())
+//    responder.register(SMB2IoctlRequest, {
+//      def referralEntry = new DFSReferralV34(4, DFSReferral.ServerType.ROOT, 0, 1000, "\\domain.com\\Sales", "\\domain.com\\Sales", "\\SERVERHOST\\Sales")
+//      def referralResponse = new SMB2GetDFSReferralResponse("\\domain.com\\Sales", 0, EnumSet.noneOf(SMB2GetDFSReferralResponse.ReferralHeaderFlags.class), [referralEntry])
+//      def buf = new SMBBuffer()
+//      referralResponse.writeTo(buf)
+//
+//      def response = new SMB2IoctlResponse()
+//      response.setOutputBuffer(buf.getCompactData())
+//      response.getHeader().setStatus(NtStatus.STATUS_SUCCESS)
+//      response
+//    }())
+//    connection = Stub(Connection, constructorArgs: [config, client, bus]) {
+//      getRemoteHostname() >> "10.0.0.10"
+//      getConfig() >> config
+//      getRemotePort() >> 445
+//      getNegotiatedProtocol() >> protocol
+//      getClient() >> client
+//      authenticate(_) >> { AuthenticationContext authContext ->
+//        session
+//      }
+//      send(_) >> { SMB2Packet p ->
+//        new DirectFuture<>(responder.respond(p))
+//      }
+//    }
+//
+//    def auth = new AuthenticationContext("username", "password".toCharArray(), "domain.com")
+//    session = new Session(123, connection, auth, bus, false, true, new JceSecurityProvider())
+//    def path = new SmbPath("domain.com", "Sales")
+//
+//    when:
+//    def newPath = session.resolver.resolve(session, path.toUncPath())
+//
+//    then:
+//    with(SmbPath.parse(newPath)) {
+//      hostname == destination
+//      shareName == "Sales"
+//    }
+//  }
+//
+//  def testResolvePath() {
+//    def connection
+//    def session
+//    def config = SmbConfig.builder().build()
+//    def client = Stub(SMBClient, constructorArgs: [config]) {
+//      connect(_) >> { String host -> connection }
+//      connect(_, _) >> { String host, int port ->
+//        connection
+//      }
+//    }
+//    def bus = new SMBEventBus()
+//    def protocol = new NegotiatedProtocol(SMB2Dialect.SMB_2_1, 1000, 1000, 1000, false)
+//    def responder = new StubResponder()
+//    responder.register(SMB2TreeConnectRequest, connectResponse())
+//    responder.register(SMB2TreeDisconnect, disconnectResponse())
+//    responder.register(SMB2IoctlRequest, {
+//      def response = new SMB2IoctlResponse()
+//      response.setOutputBuffer("260001000300000004002200010004002c010000220044006600000000000000000000000000000000005C00310030002E0030002E0030002E00310030005C00730061006C006500730000005C00310030002E0030002E0030002E00310030005C00730061006C006500730000005C0053004500520056004500520048004F00530054005C00530061006C00650073000000".decodeHex());
+//      response.getHeader().setStatus(NtStatus.STATUS_SUCCESS)
+//      response
+//    }())
+//    connection = Stub(Connection, constructorArgs: [config, client, bus]) {
+//      getRemoteHostname() >> "10.0.0.10"
+//      getConfig() >> config
+//      getRemotePort() >> 445
+//      getClient() >> client
+//      getNegotiatedProtocol() >> protocol
+//      send(_) >> { SMB2Packet p ->
+//        new DirectFuture<>(responder.respond(p))
+//      }
+//      authenticate(_) >> { AuthenticationContext auth ->
+//        new Session(0, connection, auth, bus, false, true, new JceSecurityProvider())
+//      }
+//    }
+//    AuthenticationContext auth = new AuthenticationContext("username", "password".toCharArray(), "domain.com");
+//    session = new Session(0, connection, auth, bus, false, true, new JceSecurityProvider());//TODO fill me in
+//    def path = SmbPath.parse("\\10.0.0.10\\Sales")
+//
+//    when:
+//    def newPath = session.resolver.resolve(session, path.toUncPath());
+//
+//    then:
+//    newPath.toString() == "\\SERVERHOST\\Sales"
+//
+//  }
+//  // test resolve with link resolve
+//  def "testlink"() {
+//    given:
+//    def destination = "SERVERHOST"
+//    def connection
+//    def session
+//    def config = SmbConfig.builder().build()
+//    def client = Stub(SMBClient, constructorArgs: [config]) {
+//      connect(_) >> { String host -> connection }
+//      connect(_, _) >> { String host, int port ->
+//        connection
+//      }
+//    }
+//    def bus = new SMBEventBus()
+//    def protocol = new NegotiatedProtocol(SMB2Dialect.SMB_2_1, 1000, 1000, 1000, false)
+//    def responder = new StubResponder()
+//    responder.register(SMB2TreeConnectRequest, connectResponse())
+//    responder.register(SMB2TreeDisconnect, disconnectResponse())
+//    responder.register(SMB2IoctlRequest, {
+//      def response = new SMB2IoctlResponse()
+//      def referralResponse
+//      //the root request
+//      def referralEntry = new DFSReferralV34(4, DFSReferral.ServerType.ROOT, 0, 1000, "\\SERVERHOST\\Sales\\NorthAmerica", "\\SERVERHOST\\Sales\\NorthAmerica", "\\SERVERHOST\\Regions\\Region1")
+//      referralResponse = new SMB2GetDFSReferralResponse("\\SERVERHOST\\Sales\\NorthAmerica", 0, EnumSet.noneOf(SMB2GetDFSReferralResponse.ReferralHeaderFlags.class), [referralEntry])
+//      def buf = new SMBBuffer();
+//      referralResponse.writeTo(buf);
+//
+//      response.setOutputBuffer(buf.getCompactData())
+//      response.getHeader().setStatus(NtStatus.STATUS_SUCCESS)
+//      response
+//    }())
+//
+//    connection = Stub(Connection, constructorArgs: [config, client, bus]) {
+//      getRemoteHostname() >> "10.0.0.10"
+//      getConfig() >> config
+//      getRemotePort() >> 445
+//      getNegotiatedProtocol() >> protocol
+//      getClient() >> client
+//      authenticate(_) >> { AuthenticationContext authContext ->
+//        session
+//      }
+//      send(_) >> { SMB2Packet p ->
+//        new DirectFuture<>(responder.respond(p))
+//      }
+//    }
+//
+//    def auth = new AuthenticationContext("username", "password".toCharArray(), "domain.com")
+//    session = new Session(123, connection, auth, bus, false, true, new JceSecurityProvider())
+//    def path = new SmbPath("SERVERHOST", "Sales", "NorthAmerica")
+//
+//    when:
+//    def newPath = SmbPath.parse(session.resolver.resolve(session, path.toUncPath()))
+//
+//    then:
+//    newPath.hostname == "SERVERHOST"
+//    newPath.shareName == "Regions"
+//    newPath.path == "Region1"
+//  }
+//
+//  // test resolve with link resolve
+//  def "testinterlink"() {
+//    given:
+//    def destination = "SERVERHOST"
+//    def connection
+//    def session
+//    def config = SmbConfig.builder().build()
+//    def client = Stub(SMBClient, constructorArgs: [config]) {
+//      connect(_) >> { String host -> connection }
+//      connect(_, _) >> { String host, int port ->
+//        connection
+//      }
+//    }
+//    def bus = new SMBEventBus()
+//    def protocol = new NegotiatedProtocol(SMB2Dialect.SMB_2_1, 1000, 1000, 1000, false)
+//    def responder = new StubResponder()
+//    responder.register(SMB2TreeConnectRequest, connectResponse())
+//    responder.register(SMB2TreeDisconnect, disconnectResponse())
+//    responder.register(SMB2IoctlRequest, {
+//      def response = new SMB2IoctlResponse()
+//      def referralResponse
+//      def referralEntry = new DFSReferralV34(4, DFSReferral.ServerType.LINK, 0x4, 1000, "\\SERVERHOST\\Sales\\NorthAmerica", "\\SERVERHOST\\Sales\\NorthAmerica", "\\ALTER\\Regions\\Region1")
+//      referralResponse = new SMB2GetDFSReferralResponse("\\SERVERHOST\\Sales\\NorthAmerica", 0, EnumSet.noneOf(SMB2GetDFSReferralResponse.ReferralHeaderFlags.class), [referralEntry])
+//      def buf = new SMBBuffer();
+//      referralResponse.writeTo(buf);
+//
+//      response.setOutputBuffer(buf.getCompactData())
+//      response.getHeader().setStatus(NtStatus.STATUS_SUCCESS)
+//      response
+//    }())
+//
+//    connection = Stub(Connection, constructorArgs: [config, client, bus]) {
+//      getRemoteHostname() >> "10.0.0.10"
+//      getConfig() >> config
+//      getRemotePort() >> 445
+//      getNegotiatedProtocol() >> protocol
+//      getClient() >> client
+//      authenticate(_) >> { AuthenticationContext authContext ->
+//        session
+//      }
+//      send(_) >> { SMB2Packet p ->
+//        new DirectFuture<>(responder.respond(p))
+//      }
+//    }
+//
+//    def auth = new AuthenticationContext("username", "password".toCharArray(), "domain.com")
+//    session = new Session(123, connection, auth, bus, false, true, new JceSecurityProvider())
+//    def path = new SmbPath("SERVERHOST", "Sales", "NorthAmerica")
+//
+//    when:
+//    def resolvedPath = SmbPath.parse(session.resolver.resolve(session, path.toUncPath()))
+//
+//    then:
+//    resolvedPath.hostname == "ALTER"
+//    resolvedPath.shareName == "Regions"
+//    resolvedPath.path == "Region1"
+//  }
 
-        connection = Stub(Connection, constructorArgs: [new DefaultConfig(),client,transport,bus]) {
-            getRemoteHostname() >> "10.0.0.10"
-            getRemotePort() >> 445
-            getNegotiatedProtocol() >> protocol
-            send(_ as SMB2TreeConnectRequest,null) >> {
-                c,k->Mock(Future) {
-                    get() >> {
-                        def response = new SMB2TreeConnectResponse();
-                        response.getHeader().setStatus(NtStatus.STATUS_SUCCESS)
-                        response.setCapabilities(EnumSet.of(SMB2ShareCapabilities.SMB2_SHARE_CAP_DFS));
-                        response.setShareType((byte)0x01);
-                        response
-                    }
-                }
-            }
-            send(_ as SMB2TreeDisconnect,null) >> {
-                c,k->Mock(Future) {
-                    get() >> {
-                        def response = new SMB2TreeDisconnect();
-                        response.getHeader().setStatus(NtStatus.STATUS_SUCCESS)
-                        response
-                    }
-                }
-            }
-            send(_ as SMB2IoctlRequest,null) >> {
-                c,k->Mock(Future) {
-                    get() >> {
-                        def response = new SMB2IoctlResponse()
-                        response.setOutputBuffer("260001000300000004002200010004002c010000220044006600000000000000000000000000000000005C00310030002E0030002E0030002E00310030005C00730061006C006500730000005C00310030002E0030002E0030002E00310030005C00730061006C006500730000005C0053004500520056004500520048004F00530054005C00530061006C00650073000000".decodeHex())
-                        
-                        response.getHeader().setStatus(NtStatus.STATUS_SUCCESS)
-                        response
-                    }
-                }
-            }
-        }
-        
-        def auth = new AuthenticationContext("username","password".toCharArray(),"domain.com")
-        def session = new Session(123,connection,auth,bus,false)
-        def SmbPath path = new SmbPath("10.0.0.10","Sales")
-        def dfs = new DFS();
+  // test resolve from not-covered error
 
-        when:
-        dfs.resolveDFS(session, path)
-        
-        then:
-        with(path) {
-            hostname=="SERVERHOST"
-            shareName=="Sales"
-        }
-    }
-    
-    def "testdomain" () {
-        given:
-        def destination = "SERVERHOST"
-        def connection
-        def session
-        def client = Stub(SMBClient) {
-            connect(_) >> { String host -> connection }
-            connect(_,_) >> { String host, int port ->
-                connection
-            }
-        }
-        def transport = Mock(TransportLayer)
-        def bus = new SMBEventBus()
-        def protocol = new NegotiatedProtocol(SMB2Dialect.SMB_2_1, 1000,1000,1000,false)
-    
-        connection = Stub(Connection, constructorArgs: [new DefaultConfig(),client,transport,bus]) {
-            getRemoteHostname() >> "10.0.0.10"
-            getRemotePort() >> 445
-            getNegotiatedProtocol() >> protocol
-            getClient() >> client
-            authenticate(_) >> {AuthenticationContext authContext -> 
-                session
-            }
-            send(_ as SMB2TreeConnectRequest,null) >> {
-                c,k->Mock(Future) {
-                    get() >> {
-                        def response = new SMB2TreeConnectResponse();
-                        response.getHeader().setStatus(NtStatus.STATUS_SUCCESS)
-                        response.setCapabilities(EnumSet.of(SMB2ShareCapabilities.SMB2_SHARE_CAP_DFS));
-                        response.setShareType((byte)0x01);
-                        response
-                    }
-                }
-            }
-            send(_ as SMB2TreeDisconnect,null) >> {
-                c,k->Mock(Future) {
-                    get() >> {
-                        def response = new SMB2TreeDisconnect();
-                        response.getHeader().setStatus(NtStatus.STATUS_SUCCESS)
-                        response
-                    }
-                }
-            }
-            send(_ as SMB2IoctlRequest,null) >> {
-                SMB2IoctlRequest request,k -> Mock(Future) {
-                    get() >> {
-                        def d = request.inputData[2..-1] as byte[]
-                        def dbuf = new SMBBuffer(d);
-                        def path = dbuf.readZString();
-                        def response = new SMB2IoctlResponse()
-                        def referralResponse
-                        if (path=="domain.com") {
-                            // the dc request
-                            def referralEntry = new DFSReferral(
-                                4,
-                                1000,
-                                DFSReferral.SERVERTYPE_ROOT,
-                                2, // NameListReferral
-                                "\\domain.com",
-                                0,
-                                destination,
-                                destination,
-                                "domain.com",
-                                [destination] as ArrayList
-                            );
-                            referralResponse = new SMB2GetDFSReferralResponse(
-                                "\\domain.com",
-                                0,
-                                1,
-                                0,
-                                [referralEntry] as ArrayList,
-                                "")
-                        } else if (path=="\\domain.com\\Sales"){
-                            //the root request
-                            def referralEntry = new DFSReferral(
-                                4,    // referral version
-                                1000, // ttl
-                                DFSReferral.SERVERTYPE_ROOT,
-                                0,    // referralEntryFlags: non-NameListReferral
-                                "\\SERVERHOST\\Sales", // networkAddress
-                                0,    // proximity
-                                "\\domain.com\\Sales", // dfsPath
-                                "\\domain.com\\Sales", // dfsAltPath
-                                null, // no specialName
-                                null  // no expandedNames
-                            );
-                            referralResponse = new SMB2GetDFSReferralResponse(
-                                path,
-                                0,
-                                1,
-                                0,
-                                [referralEntry] as ArrayList,
-                                "")
-                        }
-                        def buf = new SMBBuffer();
-                        referralResponse.writeTo(buf);
-                        
-                        response.setOutputBuffer(buf.getCompactData())
-                        response.getHeader().setStatus(NtStatus.STATUS_SUCCESS)
-                        response
-                    }
-                }
-            }
-        }
-        
-        def auth = new AuthenticationContext("username","password".toCharArray(),"domain.com")
-        session = new Session(123,connection,auth,bus,false)
-        def path = new SmbPath("domain.com","Sales")
-        def dfs = new DFS()
-
-        when:
-        dfs.resolveDFS(session, path)
-        
-        then:
-        with(path) {
-            hostname==destination
-            shareName=="Sales"
-        }
-    }
-    
-    def testResolvePath() {
-        def connection
-        def session
-        def client = Stub(SMBClient) {
-            connect(_) >> { String host -> connection }
-            connect(_,_) >> { String host, int port ->
-                connection
-            }
-        }
-        def transport = Mock(TransportLayer)
-        def bus = new SMBEventBus()
-        def protocol = new NegotiatedProtocol(SMB2Dialect.SMB_2_1, 1000,1000,1000,false)
-        connection = Stub(Connection, constructorArgs: [new DefaultConfig(),client,transport,bus]) {
-            getRemoteHostname() >> "10.0.0.10"
-            getRemotePort() >> 445
-            getClient() >> client
-            getNegotiatedProtocol() >> protocol
-            send(_ as SMB2TreeConnectRequest,null) >> {
-                c,k->Mock(Future) {
-                    get() >> {
-                        def response = new SMB2TreeConnectResponse();
-                        response.getHeader().setStatus(NtStatus.STATUS_SUCCESS)
-                        response.setCapabilities(EnumSet.of(SMB2ShareCapabilities.SMB2_SHARE_CAP_DFS));
-                        response.setShareType((byte)0x01);
-                        response
-                    }
-                }
-            }
-            send(_ as SMB2TreeDisconnect,null) >> {
-                c,k->Mock(Future) {
-                    get() >> {
-                        def response = new SMB2TreeDisconnect();
-                        response.getHeader().setStatus(NtStatus.STATUS_SUCCESS)
-                        response
-                    }
-                }
-            }
-            send(_ as SMB2IoctlRequest,null) >> {
-                c,k->Mock(Future) {
-                    get() >> {
-                        def response = new SMB2IoctlResponse()
-                        response.setOutputBuffer("260001000300000004002200010004002c010000220044006600000000000000000000000000000000005C00310030002E0030002E0030002E00310030005C00730061006C006500730000005C00310030002E0030002E0030002E00310030005C00730061006C006500730000005C0053004500520056004500520048004F00530054005C00530061006C00650073000000".decodeHex());
-                        response.getHeader().setStatus(NtStatus.STATUS_SUCCESS)
-                        response
-                    }
-                }
-            }
-            authenticate(_) >> { AuthenticationContext auth ->
-                new Session(0, connection, auth, bus, false);
-            }
-        }
-        DFS dfs = new DFS();
-        AuthenticationContext auth = new AuthenticationContext("username","password".toCharArray(),"domain.com");
-        session = new Session(0, connection, auth, bus, false);//TODO fill me in
-        String path = "\\10.0.0.10\\Sales";
-       
-        when:
-        def newPath = dfs.resolvePath(session, path);
-        
-        then:
-        "\\SERVERHOST\\Sales"==newPath
-
-    }
-    // test resolve with link resolve
-    def "testlink" () {
-        given:
-        def destination = "SERVERHOST"
-        def connection
-        def session
-        def client = Stub(SMBClient) {
-            connect(_) >> { String host -> connection }
-            connect(_,_) >> { String host, int port ->
-                connection
-            }
-        }
-        def transport = Mock(TransportLayer)
-        def bus = new SMBEventBus()
-        def protocol = new NegotiatedProtocol(SMB2Dialect.SMB_2_1, 1000,1000,1000,false)
-    
-        connection = Stub(Connection, constructorArgs: [new DefaultConfig(),client,transport,bus]) {
-            getRemoteHostname() >> "10.0.0.10"
-            getRemotePort() >> 445
-            getNegotiatedProtocol() >> protocol
-            getClient() >> client
-            authenticate(_) >> {AuthenticationContext authContext -> 
-                session
-            }
-            send(_ as SMB2TreeConnectRequest,null) >> {
-                c,k->Mock(Future) {
-                    get() >> {
-                        def response = new SMB2TreeConnectResponse();
-                        response.getHeader().setStatus(NtStatus.STATUS_SUCCESS)
-                        response.setCapabilities(EnumSet.of(SMB2ShareCapabilities.SMB2_SHARE_CAP_DFS));
-                        response.setShareType((byte)0x01);
-                        response
-                    }
-                }
-            }
-            send(_ as SMB2TreeDisconnect,null) >> {
-                c,k->Mock(Future) {
-                    get() >> {
-                        def response = new SMB2TreeDisconnect();
-                        response.getHeader().setStatus(NtStatus.STATUS_SUCCESS)
-                        response
-                    }
-                }
-            }
-            send(_ as SMB2IoctlRequest,null) >> {
-                SMB2IoctlRequest request,k -> Mock(Future) {
-                    get() >> {
-                        def d = request.inputData[2..-1] as byte[]
-                        def dbuf = new SMBBuffer(d);
-                        def path = dbuf.readZString();
-                        def response = new SMB2IoctlResponse()
-                        def referralResponse
-                        if (path=="\\SERVERHOST\\Sales\\NorthAmerica"){
-                            //the root request
-                            def referralEntry = new DFSReferral(
-                                4,    // referral version
-                                1000, // ttl
-                                DFSReferral.SERVERTYPE_ROOT,
-                                0,    // referralEntryFlags: non-NameListReferral
-                                "\\SERVERHOST\\Regions\\Region1", // networkAddress
-                                0,    // proximity
-                                "\\SERVERHOST\\Sales\\NorthAmerica", // dfsPath
-                                "\\SERVERHOST\\Sales\\NorthAmerica", // dfsAltPath
-                                null, // no specialName
-                                null  // no expandedNames
-                            );
-                            referralResponse = new SMB2GetDFSReferralResponse(
-                                path,
-                                0,
-                                1,
-                                0,
-                                [referralEntry] as ArrayList,
-                                "")
-                        }
-                        def buf = new SMBBuffer();
-                        referralResponse.writeTo(buf);
-                        
-                        response.setOutputBuffer(buf.getCompactData())
-                        response.getHeader().setStatus(NtStatus.STATUS_SUCCESS)
-                        response
-                    }
-                }
-            }
-        }
-        
-        def auth = new AuthenticationContext("username","password".toCharArray(),"domain.com")
-        session = new Session(123,connection,auth,bus,false)
-        def SmbPath path = new SmbPath("SERVERHOST","Sales","NorthAmerica")
-        DFS dfs = new DFS();
-        
-        when:
-            dfs.resolveDFS(session, path)
-        
-        then:
-            path.hostname=="SERVERHOST"
-            path.shareName=="Regions"
-            path.path=="Region1"
-    }
-    
-    // test resolve with link resolve
-    def "testinterlink" () {
-        given:
-        def destination = "SERVERHOST"
-        def connection
-        def session
-        def client = Stub(SMBClient) {
-            connect(_) >> { String host -> connection }
-            connect(_,_) >> { String host, int port ->
-                connection
-            }
-        }
-        def transport = Mock(TransportLayer)
-        def bus = new SMBEventBus()
-        def protocol = new NegotiatedProtocol(SMB2Dialect.SMB_2_1, 1000,1000,1000,false)
-
-        connection = Stub(Connection, constructorArgs: [new DefaultConfig(),client,transport,bus]) {
-            getRemoteHostname() >> "10.0.0.10"
-            getRemotePort() >> 445
-            getNegotiatedProtocol() >> protocol
-            getClient() >> client
-            authenticate(_) >> {AuthenticationContext authContext ->
-                session
-            }
-            send(_ as SMB2TreeConnectRequest,null) >> {
-                c,k->Mock(Future) {
-                    get() >> {
-                        def response = new SMB2TreeConnectResponse();
-                        response.getHeader().setStatus(NtStatus.STATUS_SUCCESS)
-                        response.setCapabilities(EnumSet.of(SMB2ShareCapabilities.SMB2_SHARE_CAP_DFS));
-                        response.setShareType((byte)0x01);
-                        response
-                    }
-                }
-            }
-            send(_ as SMB2TreeDisconnect,null) >> {
-                c,k->Mock(Future) {
-                    get() >> {
-                        def response = new SMB2TreeDisconnect();
-                        response.getHeader().setStatus(NtStatus.STATUS_SUCCESS)
-                        response
-                    }
-                }
-            }
-            send(_ as SMB2IoctlRequest,null) >> {
-                SMB2IoctlRequest request,k -> Mock(Future) {
-                    get() >> {
-                        def d = request.inputData[2..-1] as byte[]
-                        def dbuf = new SMBBuffer(d);
-                        def path = dbuf.readZString();
-                        def response = new SMB2IoctlResponse()
-                        def referralResponse
-                        
-                        if (path=="\\SERVERHOST\\Sales\\NorthAmerica") {
-                            //the root request
-                            def referralEntry = new DFSReferral(
-                                4,    // referral version
-                                1000, // ttl
-                                DFSReferral.SERVERTYPE_LINK,
-                                1, //ReferralServers
-                                "\\ALTER\\Regions\\Region1", // target networkAddress
-                                0,    // proximity
-                                "\\SERVERHOST\\Sales\\NorthAmerica", // dfsPath
-                                "\\SERVERHOST\\Sales\\NorthAmerica", // dfsAltPath
-                                null, // no specialName
-                                null  // no expandedNames
-                            );
-                            referralResponse = new SMB2GetDFSReferralResponse(
-                                path,
-                                0,
-                                1,
-                                0,
-                                [referralEntry] as ArrayList,
-                                "")
-                        }
-                        def buf = new SMBBuffer();
-                        referralResponse.writeTo(buf);
-                        
-                        response.setOutputBuffer(buf.getCompactData())
-                        response.getHeader().setStatus(NtStatus.STATUS_SUCCESS)
-                        response
-                    }
-                }
-            }
-        }
-        
-        def auth = new AuthenticationContext("username","password".toCharArray(),"domain.com")
-        session = new Session(123,connection,auth,bus,false)
-        def SmbPath path = new SmbPath("SERVERHOST","Sales","NorthAmerica")
-        def DFS dfs = new DFS()
-
-        when:
-            dfs.clearCaches();
-            dfs.resolveDFS(session, path)
-        
-        then:
-            path.hostname=="ALTER"
-            path.shareName=="Regions"
-            path.path=="Region1"
-    }
-    
-    
-    // test resolve from not-covered error
-
-    // test resolve with domain cache populated
-    // test resolve with referral cache populated
+  // test resolve with domain cache populated
+  // test resolve with referral cache populated
 }

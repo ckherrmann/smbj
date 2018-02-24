@@ -15,21 +15,24 @@
  */
 package com.hierynomus.smbj.auth;
 
+import com.hierynomus.mssmb2.SMB2Header;
+import com.hierynomus.protocol.commons.ByteArrayUtils;
+import com.hierynomus.security.SecurityProvider;
+import com.hierynomus.smbj.session.Session;
+import com.hierynomus.protocol.transport.TransportException;
+import com.sun.security.jgss.ExtendedGSSContext;
+import com.sun.security.jgss.InquireType;
+import org.ietf.jgss.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.security.auth.Subject;
 import java.io.IOException;
 import java.security.Key;
 import java.security.PrivilegedActionException;
 import java.security.PrivilegedExceptionAction;
 import java.util.Arrays;
-import javax.security.auth.Subject;
-import org.ietf.jgss.*;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import com.hierynomus.mssmb2.SMB2Header;
-import com.hierynomus.protocol.commons.ByteArrayUtils;
-import com.hierynomus.smbj.session.Session;
-import com.hierynomus.smbj.transport.TransportException;
-import com.sun.security.jgss.ExtendedGSSContext;
-import com.sun.security.jgss.InquireType;
+import java.util.Random;
 
 
 public class SpnegoAuthenticator implements Authenticator {
@@ -52,11 +55,11 @@ public class SpnegoAuthenticator implements Authenticator {
     private GSSContext gssContext;
 
     @Override
-    public byte[] authenticate(final AuthenticationContext context, final byte[] gssToken, final Session session) throws IOException {
+    public AuthenticateResponse authenticate(final AuthenticationContext context, final byte[] gssToken, final Session session) throws IOException {
         final GSSAuthenticationContext gssAuthenticationContext = (GSSAuthenticationContext) context;
         try {
-            return Subject.doAs(gssAuthenticationContext.getSubject(), new PrivilegedExceptionAction<byte[]>() {
-                public byte[] run() throws Exception {
+            return Subject.doAs(gssAuthenticationContext.getSubject(), new PrivilegedExceptionAction<AuthenticateResponse>() {
+                public AuthenticateResponse run() throws Exception {
                     return authenticateSession(gssAuthenticationContext, gssToken, session);
                 }
             });
@@ -65,16 +68,10 @@ public class SpnegoAuthenticator implements Authenticator {
         }
     }
 
-    private byte[] authenticateSession(GSSAuthenticationContext context, byte[] gssToken, Session session) throws TransportException {
+    private AuthenticateResponse authenticateSession(GSSAuthenticationContext context, byte[] gssToken, Session session) throws TransportException {
         try {
-            logger.info("Authenticating {} on {} using SPNEGO", context.getUsername(), session.getConnection().getRemoteHostname());
+            logger.debug("Authenticating {} on {} using SPNEGO", context.getUsername(), session.getConnection().getRemoteHostname());
             if (gssContext == null) {
-                // GSS context is not established yet because this is the first pass at authentication,
-                // so create the GSS context and attach it to our AuthenticationContext
-                if (gssToken == null) {
-                    logger.error("GSS token is null, but should have been provided by the SMB negotiation response");
-                }
-
                 GSSManager gssManager = GSSManager.getInstance();
                 Oid spnegoOid = new Oid("1.3.6.1.5.5.2"); //SPNEGO
 
@@ -84,22 +81,24 @@ public class SpnegoAuthenticator implements Authenticator {
                 gssContext = gssManager.createContext(serverName, spnegoOid, context.getCreds(), GSSContext.DEFAULT_LIFETIME);
                 gssContext.requestMutualAuth(false);
                 // TODO fill in all the other options too
-
             }
 
             byte[] newToken = gssContext.initSecContext(gssToken, 0, gssToken.length);
+
             if (newToken != null) {
-                logger.debug("Received token: {}", ByteArrayUtils.printHex(newToken));
+                logger.trace("Received token: {}", ByteArrayUtils.printHex(newToken));
             }
+
+            AuthenticateResponse response = new AuthenticateResponse(newToken);
             if (gssContext.isEstablished()) {
                 ExtendedGSSContext e = (ExtendedGSSContext) gssContext;
                 Key key = (Key) e.inquireSecContext(InquireType.KRB5_GET_SESSION_KEY);
                 if (key != null) {
                     // if a session key was negotiated, save it.
-                    session.setSigningKey(adjustSessionKeyLength(key.getEncoded()));
+                    response.setSigningKey(adjustSessionKeyLength(key.getEncoded()));
                 }
             }
-            return newToken;
+            return response;
         } catch (GSSException e) {
             throw new TransportException(e);
         }
@@ -126,6 +125,11 @@ public class SpnegoAuthenticator implements Authenticator {
             newKey = key;
         }
         return newKey;
+    }
+
+    @Override
+    public void init(SecurityProvider securityProvider, Random random) {
+        // No-op, SPNEGO does not need these.
     }
 
     @Override

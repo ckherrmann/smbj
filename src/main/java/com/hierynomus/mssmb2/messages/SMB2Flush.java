@@ -20,7 +20,7 @@ import com.hierynomus.mssmb2.SMB2FileId;
 import com.hierynomus.mssmb2.SMB2MessageCommandCode;
 import com.hierynomus.mssmb2.SMB2Packet;
 import com.hierynomus.protocol.commons.buffer.Buffer;
-import com.hierynomus.smbj.common.SMBBuffer;
+import com.hierynomus.smb.SMBBuffer;
 
 /**
  * [MS-SMB2].pdf 2.2.17 SMB2 FLUSH Request / 2.2.18 SMB2 FLUSH Response
@@ -32,8 +32,9 @@ public class SMB2Flush extends SMB2Packet {
         super();
     }
 
-    public SMB2Flush(SMB2Dialect smbDialect) {
-        super(24, smbDialect, SMB2MessageCommandCode.SMB2_FLUSH);
+    public SMB2Flush(SMB2Dialect smbDialect, SMB2FileId fileId, long sessionId, long treeId) {
+        super(24, smbDialect, SMB2MessageCommandCode.SMB2_FLUSH, sessionId, treeId);
+        this.fileId = fileId;
     }
 
     @Override
@@ -48,9 +49,5 @@ public class SMB2Flush extends SMB2Packet {
     protected void readMessage(SMBBuffer buffer) throws Buffer.BufferException {
         buffer.readUInt16(); // StructureSize (2 bytes)
         buffer.skip(2); // Reserved (2 bytes)
-    }
-
-    public void setFileId(SMB2FileId fileId) {
-        this.fileId = fileId;
     }
 }

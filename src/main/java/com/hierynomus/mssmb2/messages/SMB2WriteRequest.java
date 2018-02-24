@@ -16,7 +16,7 @@
 package com.hierynomus.mssmb2.messages;
 
 import com.hierynomus.mssmb2.*;
-import com.hierynomus.smbj.common.SMBBuffer;
+import com.hierynomus.smb.SMBBuffer;
 import com.hierynomus.smbj.io.ByteChunkProvider;
 
 /**
@@ -48,6 +48,6 @@ public class SMB2WriteRequest extends SMB2MultiCreditPacket {
         buffer.putUInt16(0); // WriteChannelInfoOffset (2 bytes)
         buffer.putUInt16(0); // WriteChannelInfoLength (2 bytes)
         buffer.putUInt32(0); // Flags (4 bytes)
-        byteProvider.writeChunks(buffer, creditsAssigned);
+        byteProvider.writeChunks(buffer, getCreditsAssigned());
     }
 }

@@ -15,12 +15,14 @@
  */
 package com.hierynomus.smbj.io;
 
-import java.io.IOException;
-import java.io.OutputStream;
 import com.hierynomus.protocol.commons.buffer.Buffer;
 import com.hierynomus.smbj.common.SMBRuntimeException;
 
-public abstract class ByteChunkProvider {
+import java.io.Closeable;
+import java.io.IOException;
+import java.io.OutputStream;
+
+public abstract class ByteChunkProvider implements Closeable {
     protected static final int CHUNK_SIZE = 64 * 1024;
 
     protected long offset;
@@ -70,4 +72,9 @@ public abstract class ByteChunkProvider {
     protected abstract int getChunk(byte[] chunk) throws IOException;
 
     public abstract int bytesLeft();
+
+    @Override
+    public void close() throws IOException {
+        // No-op
+    }
 }

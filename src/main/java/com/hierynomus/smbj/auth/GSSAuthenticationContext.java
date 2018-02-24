@@ -15,22 +15,30 @@
  */
 package com.hierynomus.smbj.auth;
 
-import javax.security.auth.Subject;
-
 import org.ietf.jgss.GSSCredential;
+
+import javax.security.auth.Subject;
 
 public class GSSAuthenticationContext extends AuthenticationContext {
     Subject subject;
     GSSCredential creds;
+
     public GSSAuthenticationContext(String username, String domain, Subject subject, GSSCredential creds) {
-        super(username, "".toCharArray(), domain);
+        super(username, new char[0], domain);
         this.subject = subject;
         this.creds = creds;
     }
+
     public Subject getSubject() {
         return subject;
     }
+
     public GSSCredential getCreds() {
         return creds;
+    }
+
+    @Override
+    public String toString() {
+        return "GSSAuthenticationContext[" + subject + ']';
     }
 }

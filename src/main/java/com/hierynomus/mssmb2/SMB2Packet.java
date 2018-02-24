@@ -15,36 +15,40 @@
  */
 package com.hierynomus.mssmb2;
 
-import com.hierynomus.protocol.Packet;
+import com.hierynomus.mserref.NtStatus;
 import com.hierynomus.protocol.commons.buffer.Buffer;
-import com.hierynomus.smbj.common.SMBBuffer;
+import com.hierynomus.smb.SMBBuffer;
+import com.hierynomus.smb.SMBPacket;
 
-public class SMB2Packet implements Packet<SMB2Packet, SMBBuffer> {
-    protected final SMB2Header header = new SMB2Header();
+import static com.hierynomus.protocol.commons.EnumWithValue.EnumUtils.isSet;
+
+public class SMB2Packet extends SMBPacket<SMB2Header> {
+    public static final int SINGLE_CREDIT_PAYLOAD_SIZE = 64 * 1024;
     protected int structureSize;
-    SMBBuffer buffer;
+    private SMBBuffer buffer;
+    private SMB2Error error;
+    private int messageStartPos;
+    private int messageEndPos;
 
-    public SMB2Packet() {
+    protected SMB2Packet() {
+        super(new SMB2Header());
     }
 
-    public SMB2Packet(int structureSize, SMB2Dialect dialect, SMB2MessageCommandCode messageType) {
+    protected SMB2Packet(int structureSize, SMB2Dialect dialect, SMB2MessageCommandCode messageType) {
         this(structureSize, dialect, messageType, 0, 0);
     }
 
-    public SMB2Packet(int structureSize, SMB2Dialect dialect, SMB2MessageCommandCode messageType, long sessionId) {
+    protected SMB2Packet(int structureSize, SMB2Dialect dialect, SMB2MessageCommandCode messageType, long sessionId) {
         this(structureSize, dialect, messageType, sessionId, 0);
     }
 
-    public SMB2Packet(int structureSize, SMB2Dialect dialect, SMB2MessageCommandCode messageType, long sessionId, long treeId) {
+    protected SMB2Packet(int structureSize, SMB2Dialect dialect, SMB2MessageCommandCode messageType, long sessionId, long treeId) {
+        super(new SMB2Header());
         this.structureSize = structureSize;
         header.setDialect(dialect);
         header.setMessageType(messageType);
         header.setSessionId(sessionId);
         header.setTreeId(treeId);
-    }
-
-    public SMB2Header getHeader() {
-        return header;
     }
 
     public long getSequenceNumber() {
@@ -55,11 +59,36 @@ public class SMB2Packet implements Packet<SMB2Packet, SMBBuffer> {
         return structureSize;
     }
 
+    /**
+     * The buffer from which this packet is read if it was a received packet
+     *
+     * @return The buffer
+     */
     public SMBBuffer getBuffer() {
         return buffer;
     }
 
-    public final void write(SMBBuffer buffer) {
+    /**
+     * The start position of this packet in the {@link #getBuffer()}. Normally this is 0, except
+     * when this packet was compounded.
+     *
+     * @return The start position of this received packet in the buffer
+     */
+    public int getMessageStartPos() {
+        return messageStartPos;
+    }
+
+    /**
+     * THe end position of this packet in the {@link #getBuffer()}. Normally this is the last written position,
+     * except when this packet was compounded.
+     *
+     * @return The end position of this received packet in the buffer
+     */
+    public int getMessageEndPos() {
+        return messageEndPos;
+    }
+
+    public void write(SMBBuffer buffer) {
         header.writeTo(buffer);
         writeTo(buffer);
     }
@@ -73,14 +102,73 @@ public class SMB2Packet implements Packet<SMB2Packet, SMBBuffer> {
         throw new UnsupportedOperationException("Should be implemented by specific message type");
     }
 
-    public final SMB2Packet read(SMBBuffer buffer) throws Buffer.BufferException {
+    public final void read(SMBBuffer buffer) throws Buffer.BufferException {
         this.buffer = buffer; // remember the buffer we read it from
+        this.messageStartPos = buffer.rpos();
         header.readFrom(buffer);
-        readMessage(buffer);
-        return this;
+        if (isSuccess(header.getStatus())) {
+            readMessage(buffer);
+        } else {
+            readError(buffer);
+        }
+        this.messageEndPos = buffer.rpos();
     }
 
+    protected void readError(SMBBuffer buffer) throws Buffer.BufferException {
+        this.error = new SMB2Error().read(header, buffer);
+    }
+
+    /**
+     * Read the message, this is only called in case the response is a success response according to {@link #isSuccess(NtStatus)}
+     *
+     * @param buffer
+     * @throws Buffer.BufferException
+     */
     protected void readMessage(SMBBuffer buffer) throws Buffer.BufferException {
         throw new UnsupportedOperationException("Should be implemented by specific message type");
+    }
+
+    /**
+     * Callback to verify whether the status is a success status. Some responses have error codes that should be treated as success responses.
+     *
+     * @param status The status to verify
+     * @return {@code true} is {@link NtStatus#isSuccess()}
+     */
+    protected boolean isSuccess(NtStatus status) {
+        return status.isSuccess() && status != NtStatus.STATUS_PENDING;
+    }
+
+    /**
+     * Check whether this packet is an intermediate ASYNC response
+     */
+    public boolean isIntermediateAsyncResponse() {
+        return isSet(header.getFlags(), SMB2MessageFlag.SMB2_FLAGS_ASYNC_COMMAND) && header.getStatus() == NtStatus.STATUS_PENDING;
+    }
+
+    /**
+     * Returns the maximum payload size of this packet. Normally this is the {@link #SINGLE_CREDIT_PAYLOAD_SIZE}.
+     * Can be overridden in subclasses to support multi-credit messages.
+     *
+     * @return
+     */
+    public int getMaxPayloadSize() {
+        return SINGLE_CREDIT_PAYLOAD_SIZE;
+    }
+
+    public int getCreditsAssigned() {
+        return getHeader().getCreditCharge();
+    }
+
+    public void setCreditsAssigned(int creditsAssigned) {
+        getHeader().setCreditCharge(creditsAssigned);
+    }
+
+    public SMB2Error getError() {
+        return error;
+    }
+
+    @Override
+    public String toString() {
+        return header.getMessage() + " with message id << " + header.getMessageId() + " >>";
     }
 }

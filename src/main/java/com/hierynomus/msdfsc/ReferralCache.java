@@ -15,13 +15,12 @@
  */
 package com.hierynomus.msdfsc;
 
-import static com.hierynomus.protocol.commons.EnumWithValue.EnumUtils.isSet;
+import com.hierynomus.msdfsc.messages.DFSReferral;
+import com.hierynomus.msdfsc.messages.SMB2GetDFSReferralResponse;
+import com.hierynomus.msdfsc.messages.SMB2GetDFSReferralResponse.ReferralHeaderFlags;
 
-import java.util.ArrayList;
-import java.util.Hashtable;
-import java.util.List;
-
-import com.hierynomus.msdfsc.SMB2GetDFSReferralResponse.ReferralHeaderFlags;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * [MS-DFSC].pdf: 3.1.1 Abstract Data Model
@@ -60,35 +59,36 @@ import com.hierynomus.msdfsc.SMB2GetDFSReferralResponse.ReferralHeaderFlags;
  */
 public class ReferralCache {
 
-    Hashtable<String, ReferralCacheEntry> cache = new Hashtable<String, ReferralCacheEntry>();
-    DFS dfs; // the owner
+    private ReferralCacheNode cacheRoot = new ReferralCacheNode("<root>");
 
-    public enum RootOrLink {
-        RCE_LINK(0x0),
-        RCE_ROOT(0x1);
-        RootOrLink(int value) {
-            this.value = value;
+    public static class TargetSetEntry {
+        String targetPath;
+        boolean targetSetBoundary;
+
+        public String getTargetPath() {
+            return targetPath;
         }
+    }
 
-        private int value;
+    public ReferralCacheEntry lookup(DFSPath dfsPath) {
+        List<String> pathComponents = dfsPath.getPathComponents();
+        ReferralCacheEntry referralEntry = cacheRoot.getReferralEntry(pathComponents.iterator());
+        return referralEntry;
+    }
 
-        public int getValue() {
-            return value;
-        }
+    public void put(ReferralCacheEntry referralCacheEntry) {
+        List<String> pathComponents = new DFSPath(referralCacheEntry.dfsPathPrefix).getPathComponents();
+        cacheRoot.addReferralEntry(pathComponents.iterator(), referralCacheEntry);
+    }
 
-        public static RootOrLink get(int serverType) {
-            if (serverType == RCE_LINK.value) {
-                return RCE_LINK;
-            } else if (serverType == RCE_ROOT.value) {
-                return RCE_ROOT;
-            }
-            return null;
-        }
-    };
+    public void clear() {
+        cacheRoot.clear();
+    }
 
-    public class ReferralCacheEntry {
+
+    public static class ReferralCacheEntry {
         String dfsPathPrefix;
-        RootOrLink rootOrLink;
+        DFSReferral.ServerType rootOrLink;
         boolean interlink;
         int ttl;
         long expires;
@@ -96,83 +96,118 @@ public class ReferralCache {
         TargetSetEntry targetHint;
         List<TargetSetEntry> targetList;
 
-        public ReferralCacheEntry(SMB2GetDFSReferralResponse response) {
-            for (int i = 0; i < response.referralEntries.size(); i++) {
-                if (response.referralEntries.get(i).path == null) {
+        public ReferralCacheEntry(SMB2GetDFSReferralResponse response, DomainCache domainCache) {
+            List<DFSReferral> referralEntries = response.getReferralEntries();
+            for (int i = 0; i < referralEntries.size(); i++) {
+                if (referralEntries.get(i).getPath() == null) {
                     // illegal value for referral cache entry.
                     throw new IllegalStateException("Path cannot be null for a ReferralCacheEntry?");
                 }
             }
-            
-            this.dfsPathPrefix = response.referralEntries.get(0).dfsPath;
-            this.rootOrLink = RootOrLink.get(response.referralEntries.get(0).serverType);
-            
+
+            DFSReferral firstReferral = referralEntries.get(0);
+            this.dfsPathPrefix = firstReferral.getDfsPath();
+            this.rootOrLink = firstReferral.getServerType();
+
 // 3.1.5.4.5 Determining Whether a Referral Response is an Interlink
 // A referral response is an Interlink if either of the following two conditions holds:
-// - If the ReferralServers and StorageServers bits of the ReferralHeaderFlags field in the referral header 
+// - If the ReferralServers and StorageServers bits of the ReferralHeaderFlags field in the referral header
 //   (as specified in section 2.2.4) are set to 1 and 0 respectively.
-// - If the TargetList has one entry, and a lookup of the first path component of the TargetList entry 
+// - If the TargetList has one entry, and a lookup of the first path component of the TargetList entry
 //   against the DomainCache results in a cache hit, indicating that the path refers to a domain namespace.
-            
-            this.interlink = isSet(response.referralHeaderFlags, ReferralHeaderFlags.ReferralServers)
-                    && !isSet(response.referralHeaderFlags, ReferralHeaderFlags.StorageServers);
-            if (!this.interlink && response.referralEntries.size() == 1) {
-                String[] pathEntries = DFS.parsePath(response.referralEntries.get(0).path);
-                this.interlink = (dfs.domainCache.lookup(pathEntries[0]) != null);
+
+            this.interlink = response.getReferralHeaderFlags().contains(ReferralHeaderFlags.ReferralServers)
+                && !response.getReferralHeaderFlags().contains(ReferralHeaderFlags.StorageServers);
+            if (!this.interlink && referralEntries.size() == 1) {
+                List<String> pathEntries = new DFSPath(firstReferral.getPath()).getPathComponents();
+                this.interlink = (domainCache.lookup(pathEntries.get(0)) != null);
             }
-            this.ttl = response.referralEntries.get(0).ttl;
+            this.ttl = firstReferral.getTtl();
             this.expires = System.currentTimeMillis() + this.ttl * 1000L;
-            this.targetFailback = isSet(response.referralHeaderFlags, SMB2GetDFSReferralResponse.ReferralHeaderFlags.TargetFailback);
-            targetList = new ArrayList<TargetSetEntry>(response.referralEntries.size());
-            for (DFSReferral r : response.referralEntries) {
+            this.targetFailback = response.getReferralHeaderFlags().contains(ReferralHeaderFlags.TargetFailback);
+            targetList = new ArrayList<>(referralEntries.size());
+            for (DFSReferral r : referralEntries) {
                 TargetSetEntry e = new TargetSetEntry();
-                e.targetPath = r.path;
+                e.targetPath = r.getPath();
                 targetList.add(e);
             }
             this.targetHint = targetList.get(0);
         }
 
-        boolean isExpired() {
+        public boolean isExpired() {
             long now = System.currentTimeMillis();
-            return (now < expires);
+            return (now > expires);
         }
-        
-        boolean isLink() {
-            return rootOrLink == RootOrLink.RCE_LINK;
+
+        public boolean isLink() {
+            return rootOrLink == DFSReferral.ServerType.LINK;
         }
-        
-        boolean isRoot() {
-            return rootOrLink == RootOrLink.RCE_ROOT;
+
+        public boolean isRoot() {
+            return rootOrLink == DFSReferral.ServerType.ROOT;
         }
-        
-        boolean isInterlink() {
-            return rootOrLink == RootOrLink.RCE_LINK && interlink;
+
+        public boolean isInterlink() {
+            return isLink() && interlink;
         }
-        
+
+        public String getDfsPathPrefix() {
+            return dfsPathPrefix;
+        }
+
+
+        public TargetSetEntry getTargetHint() {
+            return targetHint;
+        }
+
+        public List<TargetSetEntry> getTargetList() {
+            return targetList;
+        }
+
         @Override
         public String toString() {
-            return dfsPathPrefix+"->"+targetHint.targetPath+", "+targetList;
+            return dfsPathPrefix + "->" + targetHint.targetPath + ", " + targetList;
         }
 
     }
 
-    public class TargetSetEntry {
-        String targetPath;
-        boolean targetSetBoundary;
-    }
 
-    ReferralCache(DFS dfs) {
-        this.dfs = dfs;
-    }
-    public ReferralCacheEntry lookup(String path) {
-        return cache.get(path);
-    }
+    static class ReferralCacheNode {
+        String pathComponent;
+        Map<String, ReferralCacheNode> childNodes = new ConcurrentHashMap<>();
+        ReferralCacheEntry entry;
 
-    public void put(ReferralCacheEntry referralCacheEntry) {
-        cache.put(referralCacheEntry.dfsPathPrefix, referralCacheEntry);
-    }
-    
-    public void clear() {
-        cache.clear();
+        ReferralCacheNode(String pathComponent) {
+            this.pathComponent = pathComponent;
+        }
+
+        void addReferralEntry(Iterator<String> pathComponents, ReferralCacheEntry entry) {
+            if (pathComponents.hasNext()) {
+                String component = pathComponents.next().toLowerCase();
+                ReferralCacheNode referralCacheNode = childNodes.get(component);
+                if (referralCacheNode == null) {
+                    childNodes.put(component, (referralCacheNode = new ReferralCacheNode(component)));
+                }
+                referralCacheNode.addReferralEntry(pathComponents, entry);
+            } else {
+                this.entry = entry;
+            }
+        }
+
+        ReferralCacheEntry getReferralEntry(Iterator<String> pathComponents) {
+            if (pathComponents.hasNext()) {
+                String component = pathComponents.next().toLowerCase();
+                ReferralCacheNode referralCacheNode = childNodes.get(component);
+                if (referralCacheNode != null) {
+                    return referralCacheNode.getReferralEntry(pathComponents);
+                }
+            }
+            return entry;
+        }
+
+        void clear() {
+            this.childNodes = new HashMap<>();
+            this.entry = null;
+        }
     }
 }

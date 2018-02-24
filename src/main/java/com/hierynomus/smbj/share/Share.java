@@ -15,47 +15,80 @@
  */
 package com.hierynomus.smbj.share;
 
-import java.io.IOException;
-import java.util.EnumSet;
-import java.util.concurrent.Future;
-import java.util.concurrent.atomic.AtomicBoolean;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.hierynomus.msdtyp.AccessMask;
+import com.hierynomus.msdtyp.SecurityInformation;
 import com.hierynomus.mserref.NtStatus;
 import com.hierynomus.msfscc.FileAttributes;
-import com.hierynomus.mssmb2.SMB2CreateDisposition;
-import com.hierynomus.mssmb2.SMB2CreateOptions;
-import com.hierynomus.mssmb2.SMB2FileId;
-import com.hierynomus.mssmb2.SMB2MessageFlag;
-import com.hierynomus.mssmb2.SMB2ShareAccess;
-import com.hierynomus.mssmb2.messages.SMB2Close;
-import com.hierynomus.mssmb2.messages.SMB2CreateRequest;
-import com.hierynomus.mssmb2.messages.SMB2CreateResponse;
+import com.hierynomus.msfscc.FileInformationClass;
+import com.hierynomus.msfscc.FileSystemInformationClass;
+import com.hierynomus.mssmb2.*;
+import com.hierynomus.mssmb2.messages.*;
 import com.hierynomus.protocol.commons.concurrent.Futures;
-import com.hierynomus.smbj.common.SMBApiException;
+import com.hierynomus.protocol.transport.TransportException;
+import com.hierynomus.smbj.SmbConfig;
 import com.hierynomus.smbj.common.SMBRuntimeException;
 import com.hierynomus.smbj.common.SmbPath;
 import com.hierynomus.smbj.connection.Connection;
+import com.hierynomus.smbj.connection.NegotiatedProtocol;
+import com.hierynomus.smbj.io.ArrayByteChunkProvider;
+import com.hierynomus.smbj.io.ByteChunkProvider;
+import com.hierynomus.smbj.io.EmptyByteChunkProvider;
 import com.hierynomus.smbj.session.Session;
-import com.hierynomus.smbj.transport.TransportException;
+
+import java.io.IOException;
+import java.util.EnumSet;
+import java.util.Set;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class Share implements AutoCloseable {
-    private static final Logger logger = LoggerFactory.getLogger(Share.class);
+    private static final SMB2FileId ROOT_ID = new SMB2FileId(
+        new byte[]{(byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF},
+        new byte[]{(byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF}
+    );
 
-    protected SmbPath smbPath;
+    private static final EnumSet<NtStatus> SUCCESS = EnumSet.of(NtStatus.STATUS_SUCCESS);
+    private static final EnumSet<NtStatus> SUCCESS_OR_SYMLINK = EnumSet.of(NtStatus.STATUS_SUCCESS, NtStatus.STATUS_STOPPED_ON_SYMLINK);
+    private static final EnumSet<NtStatus> SUCCESS_OR_NO_MORE_FILES_OR_NO_SUCH_FILE = EnumSet.of(NtStatus.STATUS_SUCCESS, NtStatus.STATUS_NO_MORE_FILES, NtStatus.STATUS_NO_SUCH_FILE);
+    private static final EnumSet<NtStatus> SUCCESS_OR_EOF = EnumSet.of(NtStatus.STATUS_SUCCESS, NtStatus.STATUS_END_OF_FILE);
+
+    protected final SmbPath smbPath;
     protected final TreeConnect treeConnect;
-    private AtomicBoolean disconnected = new AtomicBoolean(false);
+    private final long treeId;
+    protected Session session;
+    private final SMB2Dialect dialect;
+    private final int readBufferSize;
+    private final long readTimeout;
+    private final int writeBufferSize;
+    private final long writeTimeout;
+    private final int transactBufferSize;
+    private final long transactTimeout;
+    private final long sessionId;
+    private final AtomicBoolean disconnected = new AtomicBoolean(false);
 
     Share(SmbPath smbPath, TreeConnect treeConnect) {
         this.smbPath = smbPath;
         this.treeConnect = treeConnect;
-        treeConnect.setHandle(this);
+        session = treeConnect.getSession();
+        Connection connection = treeConnect.getConnection();
+        NegotiatedProtocol negotiatedProtocol = connection.getNegotiatedProtocol();
+        dialect = negotiatedProtocol.getDialect();
+        SmbConfig config = connection.getConfig();
+        readBufferSize = Math.min(config.getReadBufferSize(), negotiatedProtocol.getMaxReadSize());
+        readTimeout = config.getReadTimeout();
+        writeBufferSize = Math.min(config.getWriteBufferSize(), negotiatedProtocol.getMaxWriteSize());
+        writeTimeout = config.getWriteTimeout();
+        transactBufferSize = Math.min(config.getTransactBufferSize(), negotiatedProtocol.getMaxTransactSize());
+        transactTimeout = config.getTransactTimeout();
+        sessionId = session.getSessionId();
+        treeId = treeConnect.getTreeId();
     }
 
     @Override
     public void close() throws IOException {
         if (!disconnected.getAndSet(true)) {
-            treeConnect.close(this);
+            treeConnect.close();
         }
     }
 
@@ -63,75 +96,265 @@ public class Share implements AutoCloseable {
         return !disconnected.get();
     }
 
+    public SmbPath getSmbPath() {
+        return smbPath;
+    }
+
     public TreeConnect getTreeConnect() {
         return treeConnect;
     }
 
-    public SMB2FileId open(
-        String path, long accessMask,
-        EnumSet<FileAttributes> fileAttributes, EnumSet<SMB2ShareAccess> shareAccess,
-        SMB2CreateDisposition createDisposition, EnumSet<SMB2CreateOptions> createOptions)
-        throws SMBApiException {
-        logger.info("open {},{}", path);
-
-        Session session = treeConnect.getSession();
-        SMB2CreateRequest cr = openFileRequest(
-            treeConnect, path, accessMask, shareAccess, fileAttributes, createDisposition, createOptions);
-        try {
-            SMB2CreateResponse cresponse = session.processSendResponse(cr);
-            if (cresponse.getHeader().getStatus() != NtStatus.STATUS_SUCCESS) {
-                throw new SMBApiException(cresponse.getHeader(), "Create failed for " + path);
-            }
-
-            return cresponse.getFileId();
-        } catch (TransportException e) {
-            throw SMBRuntimeException.Wrapper.wrap(e);
-        }
+    int getReadBufferSize() {
+        return readBufferSize;
     }
 
-    protected static SMB2CreateRequest openFileRequest(
-        TreeConnect treeConnect, String path,
-        long accessMask,
-        EnumSet<SMB2ShareAccess> shareAccess,
-        EnumSet<FileAttributes> fileAttributes,
-        SMB2CreateDisposition createDisposition,
-        EnumSet<SMB2CreateOptions> createOptions) {
+    long getReadTimeout() {
+        return readTimeout;
+    }
 
-        Session session = treeConnect.getSession();
-        
-        if (treeConnect.isDfsShare()) {
-            if (path != null) {
-                path = treeConnect.getConnection().getRemoteHostname()+"\\"+treeConnect.getShareName()+"\\"+path;
-            } else {
-                path = treeConnect.getConnection().getRemoteHostname()+"\\"+treeConnect.getShareName();
-            }
-        }
+    int getWriteBufferSize() {
+        return writeBufferSize;
+    }
+
+    SMB2FileId openFileId(String path, SMB2ImpersonationLevel impersonationLevel, Set<AccessMask> accessMask, Set<FileAttributes> fileAttributes, Set<SMB2ShareAccess> shareAccess, SMB2CreateDisposition createDisposition, Set<SMB2CreateOptions> createOptions) {
+        return createFile(path, impersonationLevel, accessMask, fileAttributes, shareAccess, createDisposition, createOptions).getFileId();
+    }
+
+    SMB2CreateResponse createFile(String path, SMB2ImpersonationLevel impersonationLevel, Set<AccessMask> accessMask, Set<FileAttributes> fileAttributes, Set<SMB2ShareAccess> shareAccess, SMB2CreateDisposition createDisposition, Set<SMB2CreateOptions> createOptions) {
         SMB2CreateRequest cr = new SMB2CreateRequest(
-            session.getConnection().getNegotiatedProtocol().getDialect(),
-            session.getSessionId(), treeConnect.getTreeId(),
+            dialect,
+            sessionId, treeId,
+            impersonationLevel,
             accessMask,
             fileAttributes,
             shareAccess,
             createDisposition,
-            createOptions, path);
-        if (treeConnect.isDfsShare()) {
-            cr.getHeader().setFlag(SMB2MessageFlag.SMB2_FLAGS_DFS_OPERATIONS);
-        }
-
-        return cr;
+            createOptions,
+            path
+        );
+        SMB2CreateResponse resp = sendReceive(cr, "Create", path, getCreateSuccessStatus(), transactTimeout);
+        return resp;
     }
 
-    public void close(SMB2FileId fileId) throws TransportException, SMBApiException {
-        Session session = treeConnect.getSession();
-        Connection connection = session.getConnection();
-        SMB2Close closeReq = new SMB2Close(
-            connection.getNegotiatedProtocol().getDialect(),
-            treeConnect.getSession().getSessionId(), treeConnect.getTreeId(), fileId);
-        Future<SMB2Close> closeFuture = session.send(closeReq);
-        SMB2Close closeResp = Futures.get(closeFuture, TransportException.Wrapper);
+    protected Set<NtStatus> getCreateSuccessStatus() {
+        return SUCCESS_OR_SYMLINK;
+    }
 
-        if (closeResp.getHeader().getStatus() != NtStatus.STATUS_SUCCESS) {
-            throw new SMBApiException(closeResp.getHeader(), "Close failed for " + fileId);
+    void flush(SMB2FileId fileId) throws SMBApiException {
+        SMB2Flush flushReq = new SMB2Flush(
+            dialect,
+            fileId,
+            sessionId, treeId
+        );
+        sendReceive(flushReq, "Flush", fileId, SUCCESS, writeTimeout);
+    }
+
+    void closeFileId(SMB2FileId fileId) throws SMBApiException {
+        SMB2Close closeReq = new SMB2Close(dialect, sessionId, treeId, fileId);
+        sendReceive(closeReq, "Close", fileId, EnumSet.of(NtStatus.STATUS_SUCCESS, NtStatus.STATUS_FILE_CLOSED), transactTimeout);
+    }
+
+    SMB2QueryInfoResponse queryInfo(SMB2FileId fileId, SMB2QueryInfoRequest.SMB2QueryInfoType infoType, Set<SecurityInformation> securityInfo, FileInformationClass fileInformationClass, FileSystemInformationClass fileSystemInformationClass) {
+        SMB2QueryInfoRequest qreq = new SMB2QueryInfoRequest(
+            dialect,
+            sessionId, treeId,
+            fileId, infoType,
+            fileInformationClass, fileSystemInformationClass, null, securityInfo
+        );
+        return sendReceive(qreq, "QueryInfo", fileId, SUCCESS, transactTimeout);
+    }
+
+    void setInfo(SMB2FileId fileId, SMB2SetInfoRequest.SMB2InfoType infoType, Set<SecurityInformation> securityInfo, FileInformationClass fileInformationClass, byte[] buffer) {
+        SMB2SetInfoRequest qreq = new SMB2SetInfoRequest(
+            dialect,
+            sessionId, treeId,
+            infoType, fileId,
+            fileInformationClass, securityInfo, buffer
+        );
+        sendReceive(qreq, "SetInfo", fileId, SUCCESS, transactTimeout);
+    }
+
+    SMB2QueryDirectoryResponse queryDirectory(SMB2FileId fileId, Set<SMB2QueryDirectoryRequest.SMB2QueryDirectoryFlags> flags, FileInformationClass informationClass, String searchPattern) {
+        SMB2QueryDirectoryRequest qdr = new SMB2QueryDirectoryRequest(
+            dialect,
+            sessionId, treeId,
+            fileId, informationClass,
+            flags,
+            0,
+            searchPattern,
+            transactBufferSize
+        );
+
+        return sendReceive(qdr, "Query directory", fileId, SUCCESS_OR_NO_MORE_FILES_OR_NO_SUCH_FILE, transactTimeout);
+    }
+
+    SMB2WriteResponse write(SMB2FileId fileId, ByteChunkProvider provider) {
+        SMB2WriteRequest wreq = new SMB2WriteRequest(
+            dialect,
+            fileId,
+            sessionId, treeId,
+            provider,
+            writeBufferSize
+        );
+        return sendReceive(wreq, "Write", fileId, SUCCESS, writeTimeout);
+    }
+
+    SMB2ReadResponse read(SMB2FileId fileId, long offset, int length) {
+        return receive(
+            readAsync(fileId, offset, length),
+            "Read",
+            fileId,
+            SUCCESS_OR_EOF,
+            readTimeout
+        );
+    }
+
+    Future<SMB2ReadResponse> readAsync(SMB2FileId fileId, long offset, int length) {
+        SMB2ReadRequest rreq = new SMB2ReadRequest(
+            dialect,
+            fileId,
+            sessionId, treeId,
+            offset,
+            Math.min(length, readBufferSize)
+        );
+        return send(rreq);
+    }
+
+    private static final EmptyByteChunkProvider EMPTY = new EmptyByteChunkProvider(0);
+
+    /**
+     * Sends a control code directly to a specified device driver, causing the corresponding device to perform the
+     * corresponding operation.
+     *
+     * @param ctlCode the control code
+     * @param isFsCtl true if the control code is an FSCTL; false if it is an IOCTL
+     * @param inData  the control code dependent input data
+     * @return the response data or <code>null</code> if the control code did not produce a response
+     */
+    public byte[] ioctl(long ctlCode, boolean isFsCtl, byte[] inData) {
+        return ioctl(ROOT_ID, ctlCode, isFsCtl, inData, 0, inData.length);
+    }
+
+    /**
+     * Sends a control code directly to a specified device driver, causing the corresponding device to perform the
+     * corresponding operation.
+     *
+     * @param ctlCode  the control code
+     * @param isFsCtl  true if the control code is an FSCTL; false if it is an IOCTL
+     * @param inData   the control code dependent input data
+     * @param inOffset the offset in <code>inData</code> where the input data starts
+     * @param inLength the number of bytes from <code>inData</code> to send, starting at <code>offset</code>
+     * @return the response data or <code>null</code> if the control code did not produce a response
+     */
+    public byte[] ioctl(long ctlCode, boolean isFsCtl, byte[] inData, int inOffset, int inLength) {
+        return ioctl(ROOT_ID, ctlCode, isFsCtl, inData, inOffset, inLength);
+    }
+
+    /**
+     * Sends a control code directly to a specified device driver, causing the corresponding device to perform the
+     * corresponding operation.
+     *
+     * @param ctlCode   the control code
+     * @param isFsCtl   true if the control code is an FSCTL; false if it is an IOCTL
+     * @param inData    the control code dependent input data
+     * @param inOffset  the offset in <code>inData</code> where the input data starts
+     * @param inLength  the number of bytes from <code>inData</code> to send, starting at <code>inOffset</code>
+     * @param outData   the buffer where the response data should be written
+     * @param outOffset the offset in <code>outData</code> where the output data should be written
+     * @param outLength the maximum amount of data to write in <code>outData</code>, starting at <code>outOffset</code>
+     * @return the number of bytes written to <code>outData</code>
+     */
+    public int ioctl(long ctlCode, boolean isFsCtl, byte[] inData, int inOffset, int inLength, byte[] outData, int outOffset, int outLength) {
+        return ioctl(ROOT_ID, ctlCode, isFsCtl, inData, inOffset, inLength, outData, outOffset, outLength);
+    }
+
+    byte[] ioctl(SMB2FileId fileId, long ctlCode, boolean isFsCtl, byte[] inData, int inOffset, int inLength) {
+        return ioctl(fileId, ctlCode, isFsCtl, inData, inOffset, inLength, -1);
+    }
+
+    byte[] ioctl(SMB2FileId fileId, long ctlCode, boolean isFsCtl, byte[] inData, int inOffset, int inLength, int maxOutputResponse) {
+        SMB2IoctlResponse response = ioctl(fileId, ctlCode, isFsCtl, new ArrayByteChunkProvider(inData, inOffset, inLength, 0), maxOutputResponse);
+        return response.getOutputBuffer();
+    }
+
+    int ioctl(SMB2FileId fileId, long ctlCode, boolean isFsCtl, byte[] inData, int inOffset, int inLength, byte[] outData, int outOffset, int outLength) {
+        SMB2IoctlResponse response = ioctl(fileId, ctlCode, isFsCtl, new ArrayByteChunkProvider(inData, inOffset, inLength, 0), outLength);
+        int length = 0;
+        if (outData != null) {
+            byte[] outputBuffer = response.getOutputBuffer();
+            length = Math.min(outLength, outputBuffer.length);
+            System.arraycopy(outputBuffer, 0, outData, outOffset, length);
         }
+        return length;
+    }
+
+    SMB2IoctlResponse ioctl(SMB2FileId fileId, long ctlCode, boolean isFsCtl, ByteChunkProvider inputData, int maxOutputResponse) {
+        Future<SMB2IoctlResponse> fut = ioctlAsync(fileId, ctlCode, isFsCtl, inputData, maxOutputResponse);
+        return receive(fut, "IOCTL", fileId, SUCCESS, transactTimeout);
+    }
+
+    public Future<SMB2IoctlResponse> ioctlAsync(long ctlCode, boolean isFsCtl, ByteChunkProvider inputData) {
+        return ioctlAsync(ROOT_ID, ctlCode, isFsCtl, inputData, -1);
+    }
+
+    private Future<SMB2IoctlResponse> ioctlAsync(SMB2FileId fileId, long ctlCode, boolean isFsCtl, ByteChunkProvider inputData, int maxOutputResponse) {
+        ByteChunkProvider inData = inputData == null ? EMPTY : inputData;
+
+        if (inData.bytesLeft() > transactBufferSize) {
+            throw new SMBRuntimeException("Input data size exceeds maximum allowed by server: " + inData.bytesLeft() + " > " + transactBufferSize);
+        }
+
+        int maxResponse;
+        if (maxOutputResponse < 0) {
+            maxResponse = transactBufferSize;
+        } else if (maxOutputResponse > transactBufferSize) {
+            throw new SMBRuntimeException("Output data size exceeds maximum allowed by server: " + maxOutputResponse + " > " + transactBufferSize);
+        } else {
+            maxResponse = maxOutputResponse;
+        }
+
+        SMB2IoctlRequest ioreq = new SMB2IoctlRequest(dialect, sessionId, treeId, ctlCode, fileId, inData, isFsCtl, maxResponse);
+        return send(ioreq);
+    }
+
+    private <T extends SMB2Packet> T sendReceive(SMB2Packet request, String name, Object target, Set<NtStatus> successResponses, long timeout) {
+        Future<T> fut = send(request);
+        return receive(fut, name, target, successResponses, timeout);
+    }
+
+    private <T extends SMB2Packet> Future<T> send(SMB2Packet request) {
+        if (!isConnected()) {
+            throw new SMBRuntimeException(getClass().getSimpleName() + " has already been closed");
+        }
+
+        try {
+            return session.send(request);
+        } catch (TransportException e) {
+            throw new SMBRuntimeException(e);
+        }
+    }
+
+    <T extends SMB2Packet> T receive(Future<T> fut, String name, Object target, Set<NtStatus> successResponses, long timeout) {
+        T resp = receive(fut, timeout);
+
+        NtStatus status = resp.getHeader().getStatus();
+        if (!successResponses.contains(status)) {
+            throw new SMBApiException(resp.getHeader(), name + " failed for " + target);
+        }
+        return resp;
+    }
+
+    <T extends SMB2Packet> T receive(Future<T> fut, long timeout) {
+        T resp;
+        try {
+            if (timeout > 0) {
+                resp = Futures.get(fut, timeout, TimeUnit.MILLISECONDS, TransportException.Wrapper);
+            } else {
+                resp = Futures.get(fut, TransportException.Wrapper);
+            }
+        } catch (TransportException e) {
+            throw new SMBRuntimeException(e);
+        }
+        return resp;
     }
 }

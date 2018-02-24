@@ -15,21 +15,12 @@
  */
 package com.hierynomus.ntlm.messages;
 
-import java.nio.charset.StandardCharsets;
-import java.util.EnumSet;
 import com.hierynomus.protocol.commons.buffer.Buffer;
 
-import static com.hierynomus.ntlm.messages.NtlmNegotiateFlag.EnumUtils;
-import static com.hierynomus.ntlm.messages.NtlmNegotiateFlag.NTLMSSP_NEGOTIATE_128;
-import static com.hierynomus.ntlm.messages.NtlmNegotiateFlag.NTLMSSP_NEGOTIATE_56;
-import static com.hierynomus.ntlm.messages.NtlmNegotiateFlag.NTLMSSP_NEGOTIATE_ALWAYS_SIGN;
-import static com.hierynomus.ntlm.messages.NtlmNegotiateFlag.NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY;
-import static com.hierynomus.ntlm.messages.NtlmNegotiateFlag.NTLMSSP_NEGOTIATE_KEY_EXCH;
-import static com.hierynomus.ntlm.messages.NtlmNegotiateFlag.NTLMSSP_NEGOTIATE_NTLM;
-import static com.hierynomus.ntlm.messages.NtlmNegotiateFlag.NTLMSSP_NEGOTIATE_SIGN;
-import static com.hierynomus.ntlm.messages.NtlmNegotiateFlag.NTLMSSP_NEGOTIATE_TARGET_INFO;
-import static com.hierynomus.ntlm.messages.NtlmNegotiateFlag.NTLMSSP_NEGOTIATE_UNICODE;
-import static com.hierynomus.ntlm.messages.NtlmNegotiateFlag.NTLMSSP_REQUEST_TARGET;
+import java.nio.charset.StandardCharsets;
+import java.util.EnumSet;
+
+import static com.hierynomus.ntlm.messages.NtlmNegotiateFlag.*;
 
 /**
  * [MS-NLMP].pdf 2.2.1.1 NEGOTIATE_MESSAGE
@@ -49,10 +40,6 @@ public class NtlmNegotiate extends NtlmPacket {
         NTLMSSP_NEGOTIATE_UNICODE));
 
     private long flags = DEFAULT_FLAGS;
-
-    public NtlmNegotiate() {
-        super();
-    }
 
     public void write(Buffer.PlainBuffer buffer) {
         buffer.putString("NTLMSSP\0", StandardCharsets.UTF_8); // Signature (8 bytes)

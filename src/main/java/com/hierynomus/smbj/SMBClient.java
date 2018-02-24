@@ -15,18 +15,21 @@
  */
 package com.hierynomus.smbj;
 
+import com.hierynomus.smbj.connection.Connection;
+import com.hierynomus.smbj.event.ConnectionClosed;
+import com.hierynomus.smbj.event.SMBEventBus;
+import com.hierynomus.smbj.paths.DFSPathResolver;
+import com.hierynomus.smbj.paths.PathResolver;
+import com.hierynomus.smbj.paths.SymlinkPathResolver;
+import net.engio.mbassy.listener.Handler;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-import com.hierynomus.msdfsc.DFS;
-import com.hierynomus.msdfsc.DFSException;
-import com.hierynomus.mssmb2.messages.SMB2CreateRequest;
-import com.hierynomus.smbj.common.SmbPath;
-import com.hierynomus.smbj.connection.Connection;
-import com.hierynomus.smbj.event.SMBEventBus;
-import com.hierynomus.smbj.session.Session;
-import com.hierynomus.smbj.transport.tcp.DirectTcpTransport;
+import static com.hierynomus.protocol.commons.IOUtils.closeSilently;
 
 /**
  * Server Message Block Client API.
@@ -39,20 +42,27 @@ public class SMBClient {
 
     private Map<String, Connection> connectionTable = new ConcurrentHashMap<>();
 
-    private Config config;
-    
-    private DFS dfs;
+    private SmbConfig config;
 
     private SMBEventBus bus;
+    private PathResolver pathResolver;
 
     public SMBClient() {
-        this(new DefaultConfig());
+        this(SmbConfig.createDefaultConfig());
     }
 
-    public SMBClient(Config config) {
+    public SMBClient(SmbConfig config) {
+        this(config, new SMBEventBus());
+    }
+
+    public SMBClient(SmbConfig config, SMBEventBus bus) {
         this.config = config;
-        bus = new SMBEventBus();
-        dfs = new DFS();
+        this.bus = bus;
+        bus.subscribe(this);
+        this.pathResolver = new SymlinkPathResolver(PathResolver.LOCAL);
+        if (config.isDfsEnabled()) {
+            this.pathResolver = new DFSPathResolver(this.pathResolver);
+        }
     }
 
     /**
@@ -78,26 +88,39 @@ public class SMBClient {
         return getEstablishedOrConnect(hostname, port);
     }
 
+    public PathResolver getPathResolver() {
+        return pathResolver;
+    }
+
     private Connection getEstablishedOrConnect(String hostname, int port) throws IOException {
         String socketAddress = hostname + ":" + port;
         synchronized (this) {
-            if (!connectionTable.containsKey(socketAddress)) {
-                Connection connection = new Connection(config, this, new DirectTcpTransport(), bus);
-                connection.connect(hostname, port);
-                connectionTable.put(socketAddress, connection);
+            String hostPort = hostname + ":" + port;
+            Connection cachedConnection = connectionTable.get(hostPort);
+            if (cachedConnection == null || !cachedConnection.isConnected()) {
+                Connection connection = new Connection(config, this, bus);
+                try {
+                    connection.connect(hostname, port);
+                } catch (IOException e) {
+                    closeSilently(connection); // Quietly close broken connection.
+                    throw e;
+                }
+                connectionTable.put(hostPort, connection);
                 return connection;
             }
-            return connectionTable.get(hostname);
+            return connectionTable.get(hostPort);
         }
     }
 
-    public void resolvePathNotCoveredError(Session session, SMB2CreateRequest packet) throws DFSException {
-        dfs.resolvePathNotCoveredError(session, packet);
+    @Handler
+    @SuppressWarnings("unused")
+    private void connectionClosed(ConnectionClosed event) {
+        synchronized (this) {
+            String hostPort = event.getHostname() + ":" + event.getPort();
+            connectionTable.remove(hostPort);
+            log.debug("Connection to << {} >> closed", hostPort);
+        }
     }
 
-    public void resolveDFS(Session session, SmbPath smbPath) throws DFSException {
-        dfs.resolveDFS(session, smbPath);
-    }
-    
-    
+    private static final Logger log = LoggerFactory.getLogger(SMBClient.class);
 }

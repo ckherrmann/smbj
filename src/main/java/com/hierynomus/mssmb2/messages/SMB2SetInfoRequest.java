@@ -19,7 +19,9 @@ import com.hierynomus.msdtyp.SecurityInformation;
 import com.hierynomus.msfscc.FileInformationClass;
 import com.hierynomus.mssmb2.*;
 import com.hierynomus.protocol.commons.EnumWithValue;
-import com.hierynomus.smbj.common.SMBBuffer;
+import com.hierynomus.smb.SMBBuffer;
+
+import java.util.Set;
 
 /**
  * [MS-SMB2].pdf 2.2.39 SMB2 SET_INFO Request
@@ -30,13 +32,13 @@ public class SMB2SetInfoRequest extends SMB2Packet {
     private final SMB2InfoType infoType;
     private final FileInformationClass fileInfoClass;
     private final byte[] buffer;
-    private final SecurityInformation securityInformation;
+    private final Set<SecurityInformation> securityInformation;
 
     public SMB2SetInfoRequest(
         SMB2Dialect negotiatedDialect, long sessionId, long treeId,
         SMB2InfoType infoType, SMB2FileId fileId,
         FileInformationClass fileInfoClass,
-        SecurityInformation securityInformation, byte[] buffer
+        Set<SecurityInformation> securityInformation, byte[] buffer
     ) {
         super(33, negotiatedDialect, SMB2MessageCommandCode.SMB2_SET_INFO, sessionId, treeId);
         this.fileId = fileId;
@@ -53,12 +55,12 @@ public class SMB2SetInfoRequest extends SMB2Packet {
     protected void writeTo(SMBBuffer smbBuffer) {
         smbBuffer.putUInt16(structureSize); // StructureSize (2 bytes)
         smbBuffer.putByte((byte) infoType.getValue()); // InfoType (1 byte)
-        smbBuffer.putByte((byte) fileInfoClass.getValue()); // FileInfoClass (1 byte)
+        smbBuffer.putByte(fileInfoClass == null ? 0 : (byte) fileInfoClass.getValue()); // FileInfoClass (1 byte)
         int offset = SMB2Header.STRUCTURE_SIZE + 32;
         smbBuffer.putUInt32(buffer.length); // BufferLength (4 bytes)
         smbBuffer.putUInt16(offset); // BufferOffset (2 bytes)
         smbBuffer.putReserved2(); // Reserved (2 bytes)
-        smbBuffer.putUInt32(securityInformation == null ? 0 : securityInformation.getValue()); // AdditionalInformation (4 bytes)
+        smbBuffer.putUInt32(securityInformation == null ? 0 : EnumWithValue.EnumUtils.toLong(securityInformation)); // AdditionalInformation (4 bytes)
         fileId.write(smbBuffer);  // FileId (16 bytes)
         smbBuffer.putRawBytes(buffer); // Buffer (variable)
     }

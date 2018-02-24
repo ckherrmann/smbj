@@ -17,6 +17,7 @@ package com.hierynomus.protocol.commons;
 
 import java.util.Collection;
 import java.util.EnumSet;
+import java.util.Set;
 
 public interface EnumWithValue<E extends Enum<E>> {
 
@@ -63,12 +64,16 @@ public interface EnumWithValue<E extends Enum<E>> {
             return defaultValue;
         }
 
-        public static <E extends Enum<E>> EnumSet<E> ensureNotNull(EnumSet<E> set, Class<E> clazz) {
+        public static <E extends Enum<E>> Set<E> ensureNotNull(Set<E> set, Class<E> clazz) {
             if (set == null) {
                 return EnumSet.noneOf(clazz);
             } else {
                 return set;
             }
+        }
+
+        public static <E extends Enum<E>> E ensureNotNull(E value, E defaultValue) {
+            return value != null ? value : defaultValue;
         }
     }
 }

@@ -261,7 +261,7 @@ public class Session implements AutoCloseable {
         }
         return connection.send(packetSignatory.sign(packet));
     }
-    
+
     public <T extends SMB2Packet> T processSendResponse(SMB2CreateRequest packet) throws TransportException {
         Future<T> responseFuture = send(packet);
         return Futures.get(responseFuture, SMBRuntimeException.Wrapper);
